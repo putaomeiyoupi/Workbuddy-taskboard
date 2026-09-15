@@ -1,0 +1,55 @@
+name: CI
+
+# 触发：推送到主分支 / 任何 PR / 手动
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的旧运行被新推送取消（省额度，也避免"旧结果误导"）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck · build · 离线自检 (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      # 一个版本失败不要掐掉另一个 —— 两个版本的结果都要看到
+      fail-fast: false
+      matrix:
+        # engines 要求 >=20；再带上当前 LTS 22 做前向验证
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # 用 ci 而不是 install：严格按 lockfile 装，避免"本地能过 CI 过不了"
+      - name: 安装依赖
+        run: npm ci
+
+      # 前端 + 后端两份 tsconfig 都要过
+      - name: 类型检查
+        run: npm run typecheck
+
+      # 这一步顺带证明"构建没坏"（dist 不进仓库，但必须能构建出来）
+      - name: 构建前端
+        run: npm run build
+
+      # 以下四个都是纯离线自检，不碰网络、不碰宿主数据：
+      #   check-hook-order      —— React hook 顺序守卫
+      #   check-host-readonly   —— 宿主库只读铁律守卫
+      #   verify-repeat         —— 定期循环（纯函数）用例
+      #   verify-countdown-text —— 倒计时文案用例
+      - name: 守卫与用例
+        run: |
+          node scripts/check-hook-order.mjs
+          node scripts/check-host-readonly.mjs
+          node scripts/verify-repeat.mjs
+          node scripts/verify-countdown-text.mjs

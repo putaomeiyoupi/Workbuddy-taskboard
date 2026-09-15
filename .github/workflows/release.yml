@@ -1,0 +1,67 @@
+name: Release
+
+# 触发：推版本标签（如 v1.0.0）时发布；也支持手动为已存在的标签补发
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要为其创建 Release 的标签（需已存在）'
+        required: true
+
+permissions:
+  # 创建 Release 需要写权限（GITHUB_TOKEN 默认只读）
+  contents: write
+
+jobs:
+  release:
+    name: 构建前端并发布 Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建前端
+        run: npm run build
+
+      # 为什么附 dist：
+      #   仓库里**不含** dist（.gitignore 已排除），使用者首次 start.cmd 时会自动构建一次。
+      #   把构建产物附在 Release 上，是给不想在本机跑构建的人一份现成的。
+      # ⚠️ 它**不能**免掉 `npm install` —— 运行需要 node_modules（含 better-sqlite3 原生
+      #    模块），而那是平台相关的，不适合打包进来。
+      #
+      # ⚠️ 这里刻意不用 heredoc：heredoc 的内容必须顶格，会破坏 YAML 的块标量
+      #    （实测被 PyYAML 报 "could not find expected ':'"）。改用 printf + 反斜杠续行，
+      #    每一续行都保持与块同级或更深的缩进。
+      - name: 打包产物（附一份安装说明）
+        run: |
+          printf '%s\n' \
+            '本压缩包只有前端构建产物（dist/）。完整使用方法：' \
+            '' \
+            '1. 下载本仓库源码（或本 Release 页面的 Source code 压缩包）' \
+            '2. 在项目根目录执行：npm install' \
+            '3. 把本压缩包解出的 dist/ 放进项目根目录（覆盖同名目录）' \
+            '4. Windows 双击 start.cmd；其它平台用 npm run dev' \
+            '' \
+            '端口默认 47831（取自 config/port.txt）。详见 README。' \
+            > dist/安装说明.txt
+          cd dist && zip -r ../kanban-dist.zip . && cd ..
+          ls -lh kanban-dist.zip
+
+      - name: 创建 Release（自动生成变更说明）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.ref_name || inputs.tag }}"
+          gh release create "$TAG" kanban-dist.zip \
+            --title "$TAG" \
+            --generate-notes

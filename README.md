@@ -3,6 +3,7 @@
 基于 **CodeBuddy Agent SDK** 的任务调度看板，用于统一管理 WorkBuddy 中的各项任务。
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/putaomeiyoupi/Workbuddy-taskboard/actions/workflows/ci.yml/badge.svg)](https://github.com/putaomeiyoupi/Workbuddy-taskboard/actions/workflows/ci.yml)
 
 > 采用 Apache-2.0 许可，可自由使用、修改、分发（含商用）。
 > 引用与致谢见文末「[引用与致谢](#引用与致谢)」。
