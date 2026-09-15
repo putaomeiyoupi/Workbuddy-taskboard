@@ -1,31 +1,9 @@
 {
   "name": "task-kanban",
   "version": "1.0.0",
-  "description": "基于 CodeBuddy Agent SDK 的任务调度看板：四列任务流转、工作空间互锁、优先级与依赖调度、SSE 实时日志",
-  "license": "Apache-2.0",
-  "author": "putaomeiyoupi",
   "type": "module",
-  "homepage": "https://github.com/putaomeiyoupi/Workbuddy-taskboard#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/putaomeiyoupi/Workbuddy-taskboard.git"
-  },
-  "bugs": {
-    "url": "https://github.com/putaomeiyoupi/Workbuddy-taskboard/issues"
-  },
-  "keywords": [
-    "task-board",
-    "kanban",
-    "agent",
-    "scheduler",
-    "codebuddy",
-    "agent-sdk",
-    "sse",
-    "react",
-    "express"
-  ],
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",

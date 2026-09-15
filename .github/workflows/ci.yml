@@ -14,20 +14,23 @@ concurrency:
 
 jobs:
   check:
-    name: typecheck · build · 离线自检 (node ${{ matrix.node }})
+    name: typecheck · build · 离线自检
     runs-on: ubuntu-latest
-    strategy:
-      # 一个版本失败不要掐掉另一个 —— 两个版本的结果都要看到
-      fail-fast: false
-      matrix:
-        # engines 要求 >=20；再带上当前 LTS 22 做前向验证
-        node: ['20', '22']
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
+      # Node 版本只有一个真源：仓库根的 `.nvmrc`。
+      # 本地用 nvm/fnm 时读的是同一个文件 ⇒ **CI 与本地不会漂移**。
+      # 想换版本（例如升到 Active LTS 24）只改 `.nvmrc` 一行即可。
+      #
+      # ⚠️ 曾经写成 ['20','22'] 的矩阵，两个问题：
+      #   ① Node 20 已于 2026-03-24 EOL ⇒ 测它没有意义
+      #   ② 两个版本把 CI 时长直接翻倍（本项目 npm ci + 构建约 3–5 分钟/腿）
+      #   本项目实际运行在 Node 22，CI 就固定测 22 —— 测"你真正用的那个"才有意义。
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version-file: '.nvmrc'
           cache: npm
 
       # ⚠️ 必须放在 `npm ci` **之前**。

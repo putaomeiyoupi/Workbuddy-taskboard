@@ -19,10 +19,51 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-/** 候选路径：受管 node 优先，其次系统安装位置、最后当前进程 */
+/**
+ * 版本号降序比较。只认前 3 段数字，容忍 `22.22.2-3` 这类带后缀的目录名。
+ */
+function cmpSemverDesc(a: string, b: string): number {
+  const pa = a.split('-')[0].split('.').map(Number);
+  const pb = b.split('-')[0].split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    const d = (pb[i] || 0) - (pa[i] || 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
+ * 受管 node 的候选路径，按优先级排列：
+ *   ① `current/node.exe` —— "当前默认版本"的指针，语义上就该最优先
+ *   ② `versions/*\/node.exe` —— 按**版本号从高到低**（不是目录名字母序！）
+ *
+ * 🔴 2026-09-15 修：原先这里**硬编码了一个具体版本**
+ *   （`.workbuddy/binaries/node/versions/22.22.2-3/node.exe`），**而且排在 `current` 前面**。
+ *   后果很隐蔽：把受管 node 从 22 升到 24、并把 `current` 指向 24 之后，
+ *   看板 spawn 的 CLI 子进程**仍然用 22** —— 因为那条硬编码路径排在最前，
+ *   而旧版本目录不会被自动删除，`fs.existsSync` 依然为真。
+ *   ⇒ 不再硬编码任何具体版本号；升级 node 时这里无需改动。
+ */
+function managedNodeCandidates(): string[] {
+  const base = path.join(os.homedir(), '.workbuddy', 'binaries', 'node');
+  const out: string[] = [path.join(base, 'current', 'node.exe')];
+  try {
+    const versDir = path.join(base, 'versions');
+    const versions = fs
+      .readdirSync(versDir, { withFileTypes: true })
+      .filter(e => e.isDirectory() && /^\d+\.\d+\.\d+/.test(e.name))
+      .map(e => e.name)
+      .sort(cmpSemverDesc);
+    for (const v of versions) out.push(path.join(versDir, v, 'node.exe'));
+  } catch {
+    // versions 目录不存在（非本机托管环境）⇒ 跳过，靠后面的系统路径兜底
+  }
+  return out;
+}
+
+/** 候选路径：受管 node 优先，其次系统安装位置 */
 const CANDIDATES: string[] = [
-  path.join(os.homedir(), '.workbuddy/binaries/node/versions/22.22.2-3/node.exe'),
-  path.join(os.homedir(), '.workbuddy/binaries/node/current/node.exe'),
+  ...managedNodeCandidates(),
   'C:/Program Files/nodejs/node.exe',
 ];
 
