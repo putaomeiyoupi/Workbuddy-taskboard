@@ -43,6 +43,12 @@ interface BoardPageProps {
   onOpenSession?: (sessionId: string) => void;
   /** 跳转到**宿主会话**的完整记录（`HostSession.id` 指向宿主库 → `/host-session/:id`） */
   onOpenHostSession?: (sessionId: string) => void;
+  /**
+   * 判断某个看板会话是否仍然存在。
+   * ⚠️ 用于防呆：会话已被清理时不该再给「查看完整对话」入口 ——
+   *    否则点进去会渲染成「新对话」页，看起来像 bug。返回 false 时按钮置灰并说明原因。
+   */
+  taskSessionExists?: (sessionId: string) => boolean;
   /** 切换到对话页 */
   onOpenChat?: () => void;
   /** 切换到设置页 */
@@ -52,6 +58,7 @@ interface BoardPageProps {
 export const BoardPage: React.FC<BoardPageProps> = ({
   onOpenSession,
   onOpenHostSession,
+  taskSessionExists,
   onOpenChat,
   onOpenSettings,
 }) => {
@@ -664,6 +671,7 @@ export const BoardPage: React.FC<BoardPageProps> = ({
         onFollowup={sendFollowup}
         onFetchTranscript={fetchTranscript}
         onOpenSession={onOpenSession}
+        sessionExists={taskSessionExists}
         onToggleRepeatPause={toggleRepeatPause}
         onClearRepeat={clearRepeat}
       />

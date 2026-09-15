@@ -125,14 +125,44 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
     });
   };
   
+  /**
+   * 「人工介入类」工具（详细说明见 renderToolDetail 里 `isHumanGate` 的注释）。
+   * 它们被看板主动拦下转成「待决策」，SDK 记为 error —— **但这不是失败**。
+   */
+  const isHumanGateTool = (name: string) => {
+    const n = (name || '').toLowerCase();
+    return n === 'askuserquestion' || n === 'exitplanmode';
+  };
+
+  /**
+   * 判断一次 tool_result 是不是「看板拦下来交给人处理」留下的记录。
+   *
+   * 看板在 `canUseTool` 里 deny 时会带上固定文案（见 `server/taskRunner.ts`）：
+   *   `用户拒绝：…` / `用户未授权：…` / `用户终止了本次执行`
+   * SDK 把这个 message 作为 tool_result 内容并标 `is_error` ⇒ 从结果文案即可辨认。
+   *
+   * ⚠️ 光看工具名不够：`Write` / `Edit` / `Bash` / `Delete` / `Move` **只有被拦时**才会 deny，
+   *    它们也可能真的执行失败。所以必须"工具名 + 结果文案"两个条件一起判。
+   */
+  const isDecisionDeny = (result?: string) => !!result && /^\s*用户(拒绝|未授权|终止)/.test(result);
+
+  /** 综合判定：这次调用属于"已转人工"，而不是失败 */
+  const isHumanGateCall = (t: ToolCall) =>
+    isHumanGateTool(t.name) || ((t.status === 'error' || t.isError) && isDecisionDeny(t.result));
+
   // 是否所有工具都已完成
   const allCompleted = toolCalls.every(tool => tool.status === 'completed' || tool.status === 'error');
-  
+
   // 是否有任何工具正在运行
   const hasRunning = toolCalls.some(tool => tool.status === 'running');
-  
-  // 是否有失败的工具
-  const hasError = toolCalls.some(tool => tool.status === 'error');
+
+  // 是否有**真正失败**的工具
+  // ⚠️ 必须排除"已转人工"的调用：那条 error 是被拦下的预期结果，
+  //    算进来会让整组显示成红色"失败"（用户反馈过这个误导）
+  const hasError = toolCalls.some(tool => tool.status === 'error' && !isHumanGateCall(tool));
+
+  /** 只要存在"已转人工"的调用，汇总图标就用琥珀色而非红/绿 */
+  const hasHumanGate = toolCalls.some(isHumanGateCall);
   
   // 汇总工具类型（去重）
   const toolSummary = useMemo(() => {
@@ -188,6 +218,20 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
     const isWebSearch = toolNameLower === 'websearch';
     const isWebFetch = toolNameLower === 'webfetch';
     const isWrite = toolNameLower === 'write';
+
+    /**
+     * 「人工介入」判定：`AskUserQuestion`（agent 向人提问）/ `ExitPlanMode`（等批准）
+     * 无条件属于人工介入；`Write`/`Edit`/`Bash` 等则要看结果文案是不是看板拦下时写的
+     * （`用户拒绝：` / `用户未授权：` / `用户终止了本次执行`）。
+     *
+     * 🔴 用户反馈：这类调用**每一条都显示「失败」**，看着像坏了。
+     *    实际机制是 —— 看板在 `canUseTool` 里**主动拦下**它们，转成「待决策」，
+     *    由人来处理；处理结果会作为**新消息**继续对话（所以功能一直是好的）。
+     *    SDK 侧被 deny 后会把这个 tool_result 标成 `is_error`，渲染层据此显示「失败」。
+     *
+     * ⇒ 这不是失败，而是「已转人工」。对它必须换一套文案与配色，不能沿用 isError。
+     */
+    const isHumanGate = isHumanGateCall(tool);
     
     // Skill 工具的特殊渲染
     // 标题: 使用 {skill名称} 技能，内容: args
@@ -570,6 +614,9 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
             <Loading size="small" />
           ) : isCompleted && !isError ? (
             <CheckCircleFilledIcon style={{ color: 'var(--td-success-color)' }} />
+          ) : isHumanGate ? (
+            // 人工介入：不是失败，用琥珀色（警示语气）而非红色（错误语气）
+            <CloseCircleFilledIcon style={{ color: '#fbbf24' }} />
           ) : (
             <CloseCircleFilledIcon style={{ color: 'var(--td-error-color)' }} />
           )}
@@ -582,11 +629,22 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
           </span>
           <span
             className="text-xs"
-            style={{ color: 'var(--td-text-color-placeholder)' }}
+            style={{ color: isHumanGate ? '#fbbf24' : 'var(--td-text-color-placeholder)' }}
           >
-            {isRunning ? '执行中...' : isError ? '失败' : '完成'}
+            {isRunning ? '执行中...' : isHumanGate ? '已转人工确认' : isError ? '失败' : '完成'}
           </span>
         </div>
+
+        {isHumanGate && (
+          <div
+            className="px-3 py-1.5 text-xs border-t"
+            style={{ color: '#fbbf24', borderColor: 'var(--td-component-stroke)' }}
+          >
+            {isHumanGateTool(tool.name)
+              ? 'agent 请求人工确认 —— 看板已拦下这次调用并放入「待决策」，你的回答会作为新消息继续这次对话。这不是执行失败。'
+              : '这次调用被看板拦下、交由你处理（写文件 / 危险命令需先确认）。这不是执行失败。'}
+          </div>
+        )}
         
         {inputStr && (
           <div
@@ -606,12 +664,18 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
           <div
             className="px-3 py-2 text-xs font-mono whitespace-pre-wrap break-all max-h-32 overflow-y-auto border-t"
             style={{
-              color: isError ? 'var(--td-error-color)' : 'var(--td-text-color-secondary)',
+              color: isHumanGate
+                ? 'var(--td-text-color-secondary)'
+                : isError
+                  ? 'var(--td-error-color)'
+                  : 'var(--td-text-color-secondary)',
               borderColor: 'var(--td-component-stroke)',
               backgroundColor: 'var(--td-bg-color-container)',
             }}
           >
-            <span style={{ color: 'var(--td-text-color-placeholder)' }}>{isError ? '错误: ' : '结果: '}</span>
+            <span style={{ color: 'var(--td-text-color-placeholder)' }}>
+              {isHumanGate ? '返回: ' : isError ? '错误: ' : '结果: '}
+            </span>
             {tool.result.length > 500 ? tool.result.slice(0, 500) + '...' : tool.result}
           </div>
         )}
@@ -637,6 +701,9 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
           <Loading size="small" />
         ) : hasError ? (
           <CloseCircleFilledIcon size={16} style={{ color: 'var(--td-error-color)' }} />
+        ) : hasHumanGate ? (
+          // 只剩"人工介入" ⇒ 琥珀色：不是失败，也不是成功
+          <CloseCircleFilledIcon size={16} style={{ color: '#fbbf24' }} />
         ) : (
           <CheckCircleFilledIcon size={16} style={{ color: 'var(--td-success-color)' }} />
         )}

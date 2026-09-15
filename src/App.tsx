@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Component, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, Component, type ReactNode } from 'react';
 import { Routes, Route, useNavigate, useParams, useLocation } from 'react-router-dom';
 import '@tdesign-react/chat/es/style/index.js';
 
@@ -285,6 +285,20 @@ function AppContent() {
     [navigate]
   );
 
+  /**
+   * 看板任务引用的会话**是否还在看板库里**。
+   *
+   * ⚠️ 为什么需要：`task.session_id` 只存 id，会话本身可能已被清理
+   *    （实测用户库里就有这种任务）。此时点「查看完整对话」会进 ChatPage 并渲染成
+   *    **「新对话」页** —— 用户会以为"点进去变成新对话"是新 bug，其实是记录真没了。
+   *    所以在源头判定，记录不存在就不给入口（按钮置灰并说明原因）。
+   */
+  const sessionIdSet = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
+  const taskSessionExists = useCallback(
+    (sessionId: string) => sessionIdSet.has(sessionId),
+    [sessionIdSet]
+  );
+
   /** 宿主会话 → 只读的宿主会话查看页（HostSessionChatView） */
   const handleOpenHostSession = useCallback(
     (sessionId: string) => {
@@ -375,6 +389,7 @@ function AppContent() {
           <BoardPage
             onOpenSession={handleOpenTaskSession}
             onOpenHostSession={handleOpenHostSession}
+            taskSessionExists={taskSessionExists}
             onOpenChat={() => navigate('/chat')}
             onOpenSettings={handleOpenSettings}
           />

@@ -45,6 +45,12 @@ interface TaskDetailDrawerProps {
   /** 读取宿主侧完整执行明细（只读） */
   onFetchTranscript: (id: string) => Promise<{ ok: boolean; updates?: unknown[]; error?: string }>;
   onOpenSession?: (sessionId: string) => void;
+  /**
+   * 该会话是否仍在看板库里。返回 false 时「查看完整对话」置灰并说明原因
+   * （会话被清理后点进去只会看到「新对话」页，那是记录没了、不是 bug）。
+   * 不传则按"存在"处理。
+   */
+  sessionExists?: (sessionId: string) => boolean;
   /** 暂停 / 恢复定期循环（暂停后仍留在「自动化定时」列，配置不丢） */
   onToggleRepeatPause?: (id: string, paused: boolean) => Promise<unknown>;
   /** 关闭定期循环（repeat_mode 置回 none；任务从「自动化定时」回到待办） */
@@ -109,6 +115,7 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
   onFollowup,
   onFetchTranscript,
   onOpenSession,
+  sessionExists,
   onToggleRepeatPause,
   onClearRepeat,
 }) => {
@@ -549,13 +556,31 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
           )}
 
           {task.session_id && onOpenSession && (
-            <Button
-              size="small"
-              variant="outline"
-              onClick={() => onOpenSession(task.session_id!)}
-            >
-              查看完整对话
-            </Button>
+            /**
+             * ⚠️ 防呆：`task.session_id` 只是 id，会话本身可能已被清理。
+             *    那种情况下点进去会进 ChatPage 并渲染成「新对话」页 ——
+             *    用户会以为"点进去变成新对话"是新 bug，其实是记录真没了。
+             *    所以会话不存在时不给可点入口，改成置灰按钮 + 说明。
+             *    （`sessionExists` 未传时按"存在"处理，保持向后兼容。）
+             */
+            sessionExists && !sessionExists(task.session_id) ? (
+              <Button
+                size="small"
+                variant="outline"
+                disabled
+                title="该任务的会话记录已不在看板库里（可能已被清理），无法查看"
+              >
+                对话记录已不存在
+              </Button>
+            ) : (
+              <Button
+                size="small"
+                variant="outline"
+                onClick={() => onOpenSession(task.session_id!)}
+              >
+                查看完整对话
+              </Button>
+            )
           )}
 
           {/**
