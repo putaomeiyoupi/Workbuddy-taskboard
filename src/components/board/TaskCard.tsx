@@ -327,5 +327,47 @@ const TaskCardInner: React.FC<TaskCardProps> = ({
   );
 };
 
-export const TaskCard = memo(TaskCardInner);
+/**
+ * 自定义 memo 比较：按「卡片**真正渲染用到的**字段」判等
+ * ============================================================================
+ * 🔴 2026-09-16 加（审计 H4）。原先写的是 `memo(TaskCardInner)`（**默认浅比较**），
+ *    而它有两个 prop **每次渲染引用都是新的**：
+ *      ① `onSelect`  —— 父组件里的 inline 箭头（已顺手用 `useCallback` 稳定）
+ *      ② `blockedBy` —— 父组件里 `.map().filter().map()` 的产物：
+ *                       **内容经常没变，但引用必变**
+ *    ⇒ 默认浅比较恒不相等 ⇒ **memo 恒定失效**，任一条 SSE 任务事件都会让
+ *      **全部**卡片重渲染。这与项目自己的纪律相悖 ——
+ *      「高频列表项必须 `memo` + 按自己真正用到的字段比较（对象每帧都是新的，
+ *        默认浅比较无效）」，`HostCard` 早已这么做。
+ *
+ * ⚠️ `task` 这里仍用**引用比较**，是有依据的（不是偷懒）：
+ *    `useTasks` 的 `upsertTask` 走 `next[idx] = { ...next[idx], ...incoming }`，
+ *    **只替换被更新的那一条**，其余任务保持原引用 ⇒ 引用相等就意味着该卡无需重渲染。
+ *    （建连时的 `snapshot` 会整批换新对象，但那是每次会话一次性的，可接受。）
+ */
+function areSameProps(a: TaskCardProps, b: TaskCardProps): boolean {
+  return (
+    a.task === b.task &&
+    a.selected === b.selected &&
+    a.landed === b.landed &&
+    a.enter === b.enter &&
+    a.draggable === b.draggable &&
+    a.onSelect === b.onSelect &&
+    a.onDragStart === b.onDragStart &&
+    a.onDragEnd === b.onDragEnd &&
+    sameStringArray(a.blockedBy, b.blockedBy)
+  );
+}
+
+/** 字符串数组的**值**比较 —— `blockedBy` 每帧都是新数组，只能比内容 */
+function sameStringArray(a?: string[], b?: string[]): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+export const TaskCard = memo(TaskCardInner, areSameProps);
 export default TaskCard;

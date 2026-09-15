@@ -259,11 +259,19 @@ export function applyWorkspaceSync(opts: SyncOptions): SyncReport {
         report.notes.push('不能删光所有工作空间（至少保留一个）');
         break;
       }
+      /**
+       * 🔴 2026-09-16 改（审计 M3）：改挂 + 删除必须**原子**完成。
+       *    原先这里依次调用 `reassignTasksWorkspace` 与 `deleteWorkspace`（两次独立写），
+       *    中途失败会留下「任务已改挂、原空间还在」的半成品，且全程无提示。
+       *    现在走 `db.reassignAndDeleteWorkspace`（内部同一事务）。
+       */
       if (used > 0 && target) {
-        db.reassignTasksWorkspace(id, target);
-        report.reassignedTasks += used;
+        const r = db.reassignAndDeleteWorkspace(id, target);
+        report.reassignedTasks += r.reassigned;
+        if (r.deleted) report.removed.push(id);
+      } else if (db.deleteWorkspace(id)) {
+        report.removed.push(id);
       }
-      if (db.deleteWorkspace(id)) report.removed.push(id);
     }
   }
 

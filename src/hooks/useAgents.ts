@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CustomAgent } from '../types';
 import { v4 as uuidv4 } from 'uuid';
+import { storageSetJSON, storageGetJSON } from '../utils/safeStorage';
 
 const STORAGE_KEY = 'customAgents';
 
@@ -18,18 +19,20 @@ const DEFAULT_AGENT: CustomAgent = {
 
 export function useAgents() {
   const [agents, setAgents] = useState<CustomAgent[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return [DEFAULT_AGENT, ...parsed.map((a: any) => ({
-          ...a,
-          createdAt: new Date(a.createdAt),
-          updatedAt: new Date(a.updatedAt),
-        }))];
-      }
-    } catch (e) {
-      console.error('Failed to load agents:', e);
+    /**
+     * 🔴 2026-09-16 修（精读 B-M2）：改用 `storageGetJSON`，不再裸访问 `localStorage`。
+     *
+     * 这里原本有 `try/catch` 兜着、**不会崩**，但：① 与同文件 `saveAgents`
+     * （用的是 `storageSetJSON`）口径不一致；② 裸调用留在外面，会让
+     * 「全仓不再有裸 storage」这条约定失去意义 —— 下次有人照着它写就会真踩坑。
+     */
+    const parsed = storageGetJSON<any[]>(STORAGE_KEY, []);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return [DEFAULT_AGENT, ...parsed.map((a: any) => ({
+        ...a,
+        createdAt: new Date(a.createdAt),
+        updatedAt: new Date(a.updatedAt),
+      }))];
     }
     return [DEFAULT_AGENT];
   });
@@ -37,7 +40,8 @@ export function useAgents() {
   // 保存到 localStorage（排除默认 agent）
   const saveAgents = useCallback((newAgents: CustomAgent[]) => {
     const toSave = newAgents.filter(a => a.id !== 'default');
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+    // 存储受限时静默降级：不持久化，但保存动作本身不能抛错
+    storageSetJSON(STORAGE_KEY, toSave);
   }, []);
 
   const addAgent = useCallback((agent: Omit<CustomAgent, 'id' | 'createdAt' | 'updatedAt'>) => {

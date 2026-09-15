@@ -80,5 +80,5 @@ Thumbs.db
 .env.*
 !.env.example
 
-# 临时探针/取证脚本与输出（用完即删）
+# 临时探针/取证脚本与输出（用完即删；见 scripts/probe-render-storm.py 的头部说明）
 _tmp*

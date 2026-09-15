@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Message, ToolCall, PermissionRequest, PermissionMode, Session, CustomAgent, ContentBlock } from '../types';
+import { storageGet, storageRemove } from '../utils/safeStorage';
 
 const STORAGE_KEYS = {
   draftInput: 'draftInput',
@@ -38,7 +39,8 @@ export function useChat(options: UseChatOptions) {
 
   const [isLoading, setIsLoading] = useState(false);
   const [inputValue, setInputValue] = useState(() => {
-    return localStorage.getItem(STORAGE_KEYS.draftInput) || '';
+    // 渲染期同步读 ⇒ 必须走 safeStorage（存储受限时裸调用会抛 SecurityError、整页白屏）
+    return storageGet(STORAGE_KEYS.draftInput) ?? '';
   });
   const [permissionRequest, setPermissionRequest] = useState<PermissionRequest | null>(null);
 
@@ -126,7 +128,7 @@ export function useChat(options: UseChatOptions) {
     }));
 
     setInputValue('');
-    localStorage.removeItem(STORAGE_KEYS.draftInput);
+    storageRemove(STORAGE_KEYS.draftInput);
     setIsLoading(true);
 
     const agent = getAgent(currentAgentId);

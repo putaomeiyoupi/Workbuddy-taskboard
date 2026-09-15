@@ -96,6 +96,21 @@ function isAlwaysAllowAnswer(answer: string): boolean {
   return answer.includes('本任务内始终允许') && isPermissionGrant(answer);
 }
 
+/**
+ * 该答复是否表示「**终止本次执行**」。
+ *
+ * ⚠️ 这个正则**必须与 `answerToPermissionResult` 里用的一致** ——
+ *    2026-09-16 修审计 H2 时把它提取出来，就是因为原先只有
+ *    `answerToPermissionResult` 认得「终止」，而外层**不知道**用户终止了，
+ *    于是 SDK 收尾后主流程照常走「✅ 任务执行完成」⇒ 落 `status:'done'`。
+ *    用户点了终止，卡片却显示成功完成。
+ *    两处判定**同一个来源**，才能避免"改一处漏一处"。
+ */
+const TERMINATE_ANSWER_RE = /^(终止|停止|取消|结束)/;
+function isTerminateAnswer(answer: string): boolean {
+  return TERMINATE_ANSWER_RE.test(answer.trim());
+}
+
 /** 把用户答复映射成 SDK 的权限结果 */
 function answerToPermissionResult(
   answer: string,
@@ -105,7 +120,7 @@ function answerToPermissionResult(
   const a = answer.trim();
 
   // 终止：deny + interrupt，让 SDK 直接收尾
-  if (/^(终止|停止|取消|结束)/.test(a)) {
+  if (isTerminateAnswer(a)) {
     return { behavior: 'deny', message: '用户终止了本次执行', interrupt: true } as PermissionResult;
   }
   // 「本任务内始终允许」：放行 + 把 SDK 建议的权限规则应用下去（destination 多为 session）
@@ -463,6 +478,16 @@ export function runTaskAgent(options: RunTaskAgentOptions): TaskRunHandle {
   const { task, cwd, onProgress, onFinish, onDecisionRequired } = options;
 
   let aborted = false;
+  /**
+   * 用户是否**主动答复「终止」**（区别于任务超时、或外部调 `handle.abort()`）。
+   * 它决定终态落到 `cancelled`（「已取消」）而不是 `failed`（「已失败」）——
+   * 见文件末尾两处 `if (aborted)` 分支。
+   *
+   * 🔴 2026-09-16 修（审计 H2）：在此之前「终止」既不置 `aborted` 也不留任何痕迹，
+   *    SDK 收到 `interrupt` 后只是安静收尾 ⇒ 主流程一路走到
+   *    `onFinish({ status: 'done' })`，把「用户主动终止」记成「执行完成」。
+   */
+  let terminatedByUser = false;
   const abortController = new AbortController();
 
   // 确保任务有一个关联的 session，用于保存完整对话记录
@@ -531,6 +556,33 @@ export function runTaskAgent(options: RunTaskAgentOptions): TaskRunHandle {
       }, TASK_TIMEOUT_MS);
     };
     armTimeout();
+
+    /**
+     * 收尾「被中止」的执行。
+     *
+     * ⚠️ 抽成一个函数，是因为**两条**路径都会走到这里：
+     *   ① 流正常收尾（SDK 收到 interrupt 后安静结束）→ try 块末尾
+     *   ② 流抛异常（中止打断了流）→ catch 块
+     *    而它们必须给出**同一个终态**。原先两处各抄一份 `status:'failed'`，
+     *    正是"改一处漏一处"的温床。
+     *
+     * 🔴 审计 H2 的核心：用户主动答复「终止」时 `terminatedByUser` 为真 ⇒
+     *    落 `cancelled`（「已取消」，前端 `boardConfig` 早已支持该标签与灰色配色），
+     *    **不再**落 `done` —— 那会让用户以为任务成功跑完了。
+     */
+    const finishAsAborted = () => {
+      pushEntry({
+        kind: 'system',
+        text: terminatedByUser ? '⛔ 任务已被用户终止' : '任务已被中止',
+      });
+      onFinish({
+        status: terminatedByUser ? 'cancelled' : 'failed',
+        run_state: null,
+        error: terminatedByUser ? '已被用户终止' : '任务超时或被中止',
+        result: fullText || null,
+        progress_log: progressLog,
+      });
+    };
 
     try {
       pushEntry({ kind: 'system', text: `任务开始执行 · 模型 ${task.model}` });
@@ -606,7 +658,23 @@ export function runTaskAgent(options: RunTaskAgentOptions): TaskRunHandle {
           if (isAlwaysAllowAnswer(answer)) {
             sessionAllowedTools.add(toolName);
           }
-          pushEntry({ kind: 'system', text: `✅ 人工答复：${answer}` });
+          /**
+           * 🔴 用户选择「终止」时必须**在这里**显式置位。
+           *
+           * SDK 收到 `{ interrupt: true }` 之后是**安静收尾**（正常结束事件流），
+           * **不会**抛异常 ⇒ 外层的 `catch` 分支根本接不到这个信号。
+           * 不置位的话，主流程会继续走到「✅ 任务执行完成」那一行，
+           * 把「用户主动终止」记成 `status: 'done'`（审计 H2 的假成功）。
+           */
+          if (isTerminateAnswer(answer)) {
+            terminatedByUser = true;
+            // ⚠️ 必须置位 —— SDK 的 interrupt 只是**安静收尾**，不会抛错；
+            //    不置位的话主流程会继续落到「✅ 任务执行完成」（审计 H2 的假成功）。
+            aborted = true;
+            pushEntry({ kind: 'system', text: `⛔ 用户选择终止：${answer}` });
+          } else {
+            pushEntry({ kind: 'system', text: `✅ 人工答复：${answer}` });
+          }
           return answerToPermissionResult(answer, inputRecord, suggestions);
         }
 
@@ -741,14 +809,7 @@ export function runTaskAgent(options: RunTaskAgentOptions): TaskRunHandle {
       // ⚠️ 2026-09-15 起，决策走 canUseTool 内的**长轮询**（就地等待），
       //    不再有"中止 → 流退出 → 在这里落待决策"的分支 —— 该分支已删除。
       if (aborted) {
-        pushEntry({ kind: 'system', text: '任务已被中止' });
-        onFinish({
-          status: 'failed',
-          run_state: null,
-          error: '任务超时或被中止',
-          result: fullText || null,
-          progress_log: progressLog,
-        });
+        finishAsAborted();
         return;
       }
 
@@ -767,16 +828,9 @@ export function runTaskAgent(options: RunTaskAgentOptions): TaskRunHandle {
       // ⚠️ 决策不再以"中止"形式出现（改为长轮询就地等待，见 canUseTool），
       //    因此原先这里"异常 + decisionHit ⇒ 落待决策"的分支已删除。
 
-      // 用户主动取消 / 超时中止
+      // 用户主动取消 / 超时中止 / 用户在授权对话框里答复「终止」
       if (aborted) {
-        pushEntry({ kind: 'system', text: '任务已被中止' });
-        onFinish({
-          status: 'failed',
-          run_state: null,
-          error: '任务超时或被中止',
-          result: fullText || null,
-          progress_log: progressLog,
-        });
+        finishAsAborted();
         return;
       }
 

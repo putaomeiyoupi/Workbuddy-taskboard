@@ -39,6 +39,8 @@ import os from 'os';
 import path from 'path';
 import { unstable_v2_authenticate } from '@tencent-ai/agent-sdk';
 import { NODE_EXE } from './runtime.js';
+// 路径脱敏（审计 M4）—— 凭据文件路径要保留"是哪个文件"，但不必带上目录结构
+import { redactLocalPaths } from './redact.js';
 
 // ============= 站点定义（唯一真源） =============
 
@@ -337,7 +339,15 @@ export function checkPassive(): PassiveLoginStatus {
     cliConfigured,
     envVars,
     apiKey: envVars.apiKey,
-    cliCredential: credential,
+    /**
+     * 🔴 2026-09-16（审计 M4）：`file` 是**绝对路径**，会带上用户名与目录结构。
+     *    它的设计目的是"便于排障展示"，所以**保留文件名、收敛掉目录**：
+     *    `C:\Users\<名字>\AppData\Local\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info`
+     *    → `…\workbuddy-desktop.info` —— 仍能辨认是哪个文件，但不再泄露本机结构。
+     */
+    cliCredential: credential
+      ? { ...credential, file: redactLocalPaths(credential.file) }
+      : credential,
     cliCredentialError: read?.readError,
     hostAccount,
     pending: pendingView(),

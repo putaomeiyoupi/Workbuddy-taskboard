@@ -47,7 +47,7 @@ interface ExecutorOption {
  * 构造执行器选项。
  *
  * ⚠️ 原先还有「WorkBuddy（交给宿主执行）」一项，**该执行器已下线**
- * ⇒ 现在只剩本地执行器。
+ * （见 `内部归档`）⇒ 现在只剩本地执行器。
  * 「本地」是否可选仍由后端探测的 SDK 可用性决定。
  */
 function buildExecutorOptions(sdkUnavailable: boolean, sdkReason?: string | null): ExecutorOption[] {
@@ -147,7 +147,7 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
   /** 修改范围输入（每行一个仓库内相对路径） */
   const [scopesInput, setScopesInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  /** 执行者：只剩本地（workbuddy 执行器已下线） */
+  /** 执行者：只剩本地（workbuddy 执行器已下线，见 内部归档） */
   const [executor, setExecutor] = useState<TaskExecutor>('local');
   /**
    * 按执行者拉取的模型清单。
@@ -200,6 +200,26 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
     setSubmitting(false);
     setExecutor('local');
     setScopesInput('');
+
+    /**
+     * 🔴 2026-09-16 修（精读 A-M2）：**循环相关的子状态也必须复位**。
+     *
+     * 上面清的是主字段，而 `schedKind / pFreq / pTime / pDays / pDom /
+     * iEvery / iUnit / untilAt / limitCount / showAllModels` 全都没清 ——
+     * 于是「上次建的是『每周三 08:00 的循环任务』，这次再打开新建对话框」时，
+     * 定时区会**沿用上一次的配置**：用户以为是从头填，实际带着旧值提交。
+     * 这类"跨次残留"最容易造成「我明明没设循环，任务却按周期跑」的困惑。
+     */
+    setSchedKind('once');
+    setPFreq('daily');
+    setPTime('08:00');
+    setPDays([1]);
+    setPDom(1);
+    setIEvery(1);
+    setIUnit('hour');
+    setUntilAt('');
+    setLimitCount('');
+    setShowAllModels(false);
   }, [visible, defaultWorkspaceId, workspaces, defaultModel, models]);
 
   // 可选依赖：排除自己、正在运行、已完成/已取消的任务
@@ -261,6 +281,14 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
   }, [visible, activeModels, defaultModel, model]);
 
   const handleSubmit = async () => {
+    /**
+     * 🔴 2026-09-16 加（精读 A-M3）：**入口级防重**。
+     *
+     * 提交按钮虽然带了 `disabled={submitting}`，但那依赖 React 状态更新及时落到 DOM；
+     * 快速双击、或在输入框里连续回车，仍有可能进两次 —— 结果是创建出两条一模一样的任务
+     * （带循环规则的更糟：两条循环各跑各的）。这里直接挡在函数入口。
+     */
+    if (submitting) return;
     if (!title.trim()) {
       MessagePlugin.warning('请填写任务标题');
       return;
@@ -310,7 +338,7 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
 
     setSubmitting(true);
     try {
-      await onConfirm({
+      const created = await onConfirm({
         title: title.trim(),
         prompt: prompt.trim(),
         workspace_id: workspaceId,
@@ -332,6 +360,16 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
         repeat_until: useSchedule && untilAt ? new Date(untilAt).toISOString() : null,
         repeat_limit: useSchedule && limitCount.trim() ? Number(limitCount) : null,
       });
+
+      /**
+       * 🔴 2026-09-16 修（精读 A-H2）：**只有创建成功才关窗**。
+       *
+       *    `onConfirm` 失败时 `return null`（不抛异常，原因由上层弹错误提示）。
+       *    原先无论成败都紧跟着 `onClose()` —— 用户会**同时**看到「创建失败」的提示、
+       *    又被关掉窗口，已填的内容（标题 / 提示词 / 依赖 / 范围 / 循环规则…）全部丢失，
+       *    无法就地重试。现在失败就**留在原地**，改完可直接重提。
+       */
+      if (!created) return;
       onClose();
     } finally {
       setSubmitting(false);
@@ -361,6 +399,15 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
     <Dialog
       visible={visible}
       onClose={onClose}
+      /**
+       * 🔴 2026-09-16 加（精读 A-L2）：关闭时**销毁内部子树**。
+       *
+       * 不加的话，这个体量不小的对话框（十几个输入 + 若干 `useMemo`）会一直挂在树上，
+       * 而父组件 `BoardPage` 会因 SSE 任务事件 / 每 5s 对账而重渲染 ——
+       * 于是**已经关掉的对话框也跟着一起重算**。项目的渲染纪律是
+       * 「别让没在显示的东西参与渲染」（参见 autoReload / HostCard 的相关注释）。
+       */
+      destroyOnClose
       header="新建任务"
       width={620}
       footer={

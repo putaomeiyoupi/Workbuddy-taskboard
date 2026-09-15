@@ -102,7 +102,7 @@ echo.
 
 rem ===============================================================
 rem [3.5/5] WorkBuddy CLI launcher check removed 2026-09-15:
-rem the CLI --serve dispatch channel is retired,
+rem the CLI --serve dispatch channel is retired (see 内部归档),
 rem so whether that launcher exists no longer affects anything.
 
 rem ===============================================================

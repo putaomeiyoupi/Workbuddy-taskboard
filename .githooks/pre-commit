@@ -9,8 +9,14 @@
 #
 # 注意：hook 由 Git 直接调起，不会经过用户的 shell 配置，
 # 所以 node 可能不在这条进程的 PATH 里（Windows 上很常见）。
-# 这里先尽力定位 node，实在找不到才放行并给出提示 ——
-# 直接让 hook 报 "node: not found" 会卡死所有提交，反而更糟。
+# 这里会尽力定位 node（PATH → KANBAN_NODE → WorkBuddy 自带）。
+#
+# 🔴 2026-09-16 改（审计 P2 / C-M2）：**定位不到 node 就拒绝提交**，不再静默放行。
+#    原先找不到 node 会 `exit 0` 并打印一条提示 —— 出发点是"别卡死所有提交"，
+#    但代价是这道闸**可以无声失效**（提交照常成功，而检查一次都没跑）。
+#    「门禁静默失效」比「门禁不可用」危险得多：前者会给人"已覆盖"的错觉。
+#    现在改为 fail-closed：提示里给出两条出路（装 node / 设 KANBAN_NODE）
+#    与显式绕过方式（--no-verify）；CI 另有一道 `check-commit --all` 兜底。
 
 # ---- 定位 node ----
 NODE_BIN=""
@@ -33,10 +39,23 @@ fi
 
 if [ -z "$NODE_BIN" ]; then
   echo ""
-  echo "⚠️  未找到 node，已跳过提交前检查。"
-  echo "    建议把 node 加入 PATH，或用 KANBAN_NODE 指定其完整路径。"
+  echo "──────────────────────────────────────────────"
+  echo " ❌ 未找到 node —— **拒绝提交**（提交前检查无法运行）"
   echo ""
-  exit 0
+  echo " 为什么不是「跳过检查后放行」："
+  echo "   那会让这道闸**静默失效** —— 提交看起来成功，实际什么都没检查。"
+  echo "   本项目的密钥 / 大文件 / 本机路径检查全在 scripts/check-commit.mjs，"
+  echo "   跳过它等于裸奔。"
+  echo ""
+  echo " 怎么修（任选其一）："
+  echo "   1) 把 node 加入 PATH"
+  echo "   2) export KANBAN_NODE=/path/to/node   （本 hook 会优先用它）"
+  echo ""
+  echo " 确认这次确实要绕过（自行承担风险）："
+  echo "   git commit --no-verify"
+  echo "   ⚠️ CI 里另有一道 check-commit --all，绕过本地这关也会在那里被拦下。"
+  echo "──────────────────────────────────────────────"
+  exit 1
 fi
 
 # ---- 运行检查 ----

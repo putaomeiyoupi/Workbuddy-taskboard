@@ -71,12 +71,23 @@ export const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
       MessagePlugin.warning('名称与路径均为必填');
       return;
     }
-    await onCreate({
+    /**
+     * 🔴 2026-09-16 修（精读 A-M1）：**失败时不清表单、也不提示成功**。
+     *
+     * `onCreate` 失败时返回 null（不抛异常，原因由上层弹错误提示）。
+     * 原实现无条件清空三个输入并弹「工作空间已创建」—— 用户以为建好了，其实没有，
+     * 而且刚填的名字/路径都被清掉，只能重敲一遍。
+     */
+    const created = await onCreate({
       name: newName.trim(),
       path: newPath.trim().replace(/\\/g, '/'),
       max_concurrency: newConcurrency,
       color: newColor,
     });
+    if (!created) {
+      MessagePlugin.error('创建失败，请重试（已保留你填的内容）');
+      return;
+    }
     setNewName('');
     setNewPath('');
     setNewConcurrency(1);
@@ -97,7 +108,28 @@ export const WorkspaceManager: React.FC<WorkspaceManagerProps> = ({
 
   const saveEdit = async () => {
     if (!editingId) return;
-    await onUpdate(editingId, editDraft as any);
+    /**
+     * 🔴 2026-09-16 修（精读 A-M1）：
+     *   ① 补上**名称/路径必填校验** —— `handleCreate` 有，这里原先没有，
+     *      把名称清空也能存进去，列表里就会出现一个没有名字的空间；
+     *   ② 失败时**不退出编辑态、不提示成功**（`onUpdate` 失败返回 null）。
+     *      原先无论成败都收起编辑并弹「已保存」，用户以为改好了、实际没改。
+     */
+    const name = String(editDraft.name ?? '').trim();
+    const path = String(editDraft.path ?? '').trim();
+    if (!name || !path) {
+      MessagePlugin.warning('名称与路径均为必填');
+      return;
+    }
+    const saved = await onUpdate(editingId, {
+      ...editDraft,
+      name,
+      path: path.replace(/\\/g, '/'),
+    } as any);
+    if (!saved) {
+      MessagePlugin.error('保存失败，请重试（已保留你改的内容）');
+      return;
+    }
     setEditingId(null);
     setEditDraft({});
     MessagePlugin.success('已保存');

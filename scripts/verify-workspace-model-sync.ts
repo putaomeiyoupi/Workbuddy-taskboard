@@ -13,6 +13,19 @@
  * ⚠️ 不直接改真实库 —— 真实库的迁移由用户启动服务时执行，本脚本只做副本推演。
  *
  * 运行：<node> node_modules/tsx/dist/cli.mjs scripts/verify-workspace-model-sync.ts
+ *
+ * ✅ 2026-09-16 已**按现状重写断言**（审计 H5 的收尾），实测 **20/20 通过**：
+ *    · 「迁移已升级到 v6」→ 改为从 `server/db.ts` 读**真源** `SCHEMA_VERSION`
+ *      （硬编码版本号注定会再烂一次）；脚本末尾两处 v6 文案同步改为动态版本。
+ *    · 「模型清单来源为 workbuddy-config」→ 宿主执行器下线后，`/api/models` 的语义已改为
+ *      「Agent SDK 实际能跑的模型」，合法取值为 `sdk` / `sdk-cooldown` / `sdk-unavailable`，
+ *      断言随之改写。
+ *    · 「模型 id 集合与产品配置一致」→ 两侧语义已不同（产品 = 候选全集，SDK = 可用子集），
+ *      改为只要求**「多出」为 0**（缺失属正常的能力子集），保留「不返回产品不认识的模型」这个真意图。
+ *    · `(diff2.both)[0].id` 是**未防护的下标访问** —— 宿主侧无同路径空间时崩在 `.id`，
+ *      而报错信息完全指不到这里；改为显式 `skip()`：单独计数、汇总可见，**不冒充通过**。
+ * ⚠️ 仍**不进 CI**：它依赖**真实库的副本**（`data/chat.db`）与**宿主产品配置 spill**
+ *    （`os.tmpdir()` 下的 `workbuddy-product-spill-*`），CI 上都没有 ⇒ 定位为**本机验收脚本**。
  */
 import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
@@ -31,10 +44,42 @@ const TEST_DB = path.join(PROJECT, 'data', 'ws-migrate-test.db');
 const PORT = 3142;
 const BASE = `http://127.0.0.1:${PORT}`;
 
+/**
+ * schema 版本的**真源**。
+ *
+ * ⚠️ 2026-09-16（审计 H5 的收尾）：本脚本原先写死 `=== 6`，而 schema 早已升到 7，
+ *    于是断言恒红。**任何硬编码版本号的断言都注定会再烂一次** ——
+ *    所以这里直接从 `server/db.ts` 源码解析 `const SCHEMA_VERSION = N`，让断言自动跟随。
+ *    解析不到就**直接抛错**（而不是兜个默认值），否则又会退化成"悄悄失准"。
+ */
+const EXPECTED_SCHEMA_VERSION = (() => {
+  const src = fs.readFileSync(path.join(PROJECT, 'server', 'db.ts'), 'utf8');
+  const m = src.match(/const\s+SCHEMA_VERSION\s*=\s*(\d+)/);
+  if (!m) throw new Error('未能从 server/db.ts 解析出 SCHEMA_VERSION —— 真源可能改了写法，请核对');
+  return Number(m[1]);
+})();
+
 const results: Array<{ name: string; ok: boolean; detail: string }> = [];
 function check(name: string, ok: boolean, detail = '') {
   results.push({ name, ok, detail });
   console.log(`${ok ? '✅' : '❌'} ${name}${detail ? `  —— ${detail}` : ''}`);
+}
+
+/**
+ * 显式「跳过」：**环境前提不具备**（既不是断言失败，也不代表数据形态变了）。
+ *
+ * ⚠️ 2026-09-16 加（审计 H5 的收尾）：本脚本要用「两边都有」的工作空间来验证
+ *    「改挂后删除」，而那个集合取决于**宿主侧是否有同路径空间** —— 宿主为空时它就是空的。
+ *    原实现直接 `both[0].id` ⇒ TypeError ⇒ 整个脚本被打断并报成
+ *    「脚本执行未抛异常 —— Cannot read properties of undefined」，**真正原因完全看不见**。
+ *
+ *    刻意**不**用 `ok: true` 冒充通过（那是假绿）：跳过单独计数，并在汇总里显式列出，
+ *    让人一眼看到"这条没验"。
+ */
+let skippedCount = 0;
+function skip(name: string, reason: string) {
+  skippedCount++;
+  console.log(`⏭ 跳过 ${name}  —— ${reason}`);
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -181,8 +226,8 @@ async function main() {
     const models = (await getJson('/api/models')).body;
 
     check(
-      '迁移已升级到 v6',
-      afterMigrate.schemaVersion === 6,
+      `迁移已升级到当前 SCHEMA_VERSION（v${EXPECTED_SCHEMA_VERSION}）`,
+      afterMigrate.schemaVersion === EXPECTED_SCHEMA_VERSION,
       `version=${afterMigrate.schemaVersion}`
     );
     check(
@@ -275,10 +320,20 @@ async function main() {
     }
     const diff2 = (await getJson('/api/workspaces/reconcile')).body;
     const target = (diff2.onlyBoard as any[]).find(w => w.id === fixtureWsId);
+    /**
+     * ⚠️ 2026-09-16 按现状重写（审计 H5 的收尾）：
+     *   原断言还要求 `diff2.onlyBoard.length === 1` —— 那等于假设"库里除夹具之外
+     *   没有任何别的仅看板空间"。用真实库副本时这条**必然不成立**
+     *   （实测会带出 sunshinerose / ssr / tmp 等既有空间）。
+     *
+     *   核心语义其实是「**夹具空间**能被识别为仅看板有」，与库里还有没有别的空间无关。
+     *   所以只断言 `!!target`，并把命中情况与总数打进 detail —— 保留可观测性，
+     *   同时去掉那条绑死环境的附加条件。
+     */
     check(
       '夹具空间被识别为「仅看板有」',
-      !!target && diff2.onlyBoard.length === 1,
-      `onlyBoard=${(diff2.onlyBoard as any[]).map(w => w.name).join(',')}`
+      !!target,
+      `命中=${target ? target.name : '未命中'}；该库共 ${diff2.onlyBoard.length} 个仅看板空间`
     );
     if (!target) throw new Error('夹具空间未能出现在 onlyBoard 里');
 
@@ -290,24 +345,50 @@ async function main() {
       `blocked=${JSON.stringify(blocked.body?.report?.blocked)}`
     );
 
-    const moved = await postJson('/api/workspaces/sync', {
-      removeIds: [target.id],
-      reassignTo: (diff2.both as any[])[0].id,
-    });
-    const afterRemove = snapshot(TEST_DB);
-    check(
-      '指定改挂目标后可删除，且任务被改挂（无孤儿）',
-      moved.body?.report?.removed?.length === 1 && afterRemove.orphanTasks === 0,
-      `removed=${moved.body?.report?.removed?.length} reassigned=${moved.body?.report?.reassignedTasks} 剩余空间=${afterRemove.wsCount}`
-    );
+    /**
+     * ⚠️ 2026-09-16 按现状重写（审计 H5 的收尾）：
+     *   `(diff2.both as any[])[0].id` 是**未防护的下标访问** —— 当「两边都有」的集合为空
+     *   （宿主侧没有同路径空间，例如宿主未使用、或本次以空宿主环境运行）时，`[0]` 就是
+     *   `undefined`，`.id` 直接抛 TypeError，把整个脚本打断，并报成
+     *   「脚本执行未抛异常」—— **错误信息完全指不到这里**。
+     *   改为**先取再判**：没有可改挂的目标就显式 skip（可见、单独计数），而不是崩掉。
+     */
+    const reassignTarget = (diff2.both as any[])[0];
+    let afterRemove = snapshot(TEST_DB);
+    if (!reassignTarget) {
+      skip(
+        '指定改挂目标后可删除，且任务被改挂（无孤儿）',
+        `「两边都有」的空间为空（该库 ${(diff2.both as any[]).length} 个）⇒ 没有可改挂的目标，前提不具备`
+      );
+    } else {
+      const moved = await postJson('/api/workspaces/sync', {
+        removeIds: [target.id],
+        reassignTo: reassignTarget.id,
+      });
+      afterRemove = snapshot(TEST_DB);
+      check(
+        '指定改挂目标后可删除，且任务被改挂（无孤儿）',
+        moved.body?.report?.removed?.length === 1 && afterRemove.orphanTasks === 0,
+        `removed=${moved.body?.report?.removed?.length} reassigned=${moved.body?.report?.reassignedTasks} 剩余空间=${afterRemove.wsCount}`
+      );
+    }
 
     // ============ C. 模型清单同源 ============
     return { afterMigrate, diff, models, afterRemove };
   });
 
+  /**
+   * ⚠️ 2026-09-16 按现状重写（审计 H5 的收尾）：
+   *   原断言要求 `source === 'workbuddy-config'` —— 那在「模型要派发给 WorkBuddy 宿主执行」
+   *   的年代成立，`/api/models` 当时读的是宿主的**产品配置**。
+   *   但 workbuddy 执行器已整体下线（见 `内部归档`），该端点的语义随之改成
+   *   「**Agent SDK 实际能跑的模型**」（见 `server/index.ts` 里该端点的注释），
+   *   合法取值变成 `sdk` / `sdk-cooldown` / `sdk-unavailable`。
+   *   ⇒ 断言随之改写。产品配置**仍然有用** —— 它作为独立真源参与下面的 id 交叉比对。
+   */
   check(
-    '模型清单来源为 WorkBuddy 产品配置（与桌面端同源）',
-    migrateReport.models?.source === 'workbuddy-config',
+    '模型清单来源为本地 Agent SDK（宿主执行器下线后只剩这一份清单）',
+    ['sdk', 'sdk-cooldown', 'sdk-unavailable'].includes(String(migrateReport.models?.source)),
     `source=${migrateReport.models?.source} 数量=${migrateReport.models?.models?.length}`
   );
 
@@ -340,10 +421,19 @@ async function main() {
     const missing = [...expected].filter(id => !actual.has(id));
     const extra = [...actual].filter(id => !expected.has(id));
 
+    /**
+     * ⚠️ 2026-09-16 按现状重写（审计 H5 的收尾）：
+     *   原断言要求两侧 id 集合**完全一致**。但两侧语义现在不同，本就不该相等：
+     *     · 产品配置 = 宿主认识的全部**候选**（含未开通、未在本机注册的）；
+     *     · `/api/models` = **SDK 当前真正能跑的**。
+     *   实测差值就是「缺失 5 个」（产品有、SDK 未提供），而「多出」为 0。
+     *   ⇒ 「缺失」是**正常**的（能力子集）；只有「多出」才是问题 ——
+     *     那意味着界面会给出**产品根本不认识的模型**，用户选中必然得到 400。
+     */
     check(
-      `模型 id 集合与产品配置一致（${expected.size} 个）`,
-      missing.length === 0 && extra.length === 0,
-      `缺失=${missing.slice(0, 5).join(',') || '无'} 多出=${extra.slice(0, 5).join(',') || '无'}`
+      'SDK 清单不返回产品配置之外的模型（多出必须为 0；缺失属正常的能力子集）',
+      extra.length === 0,
+      `多出=${extra.slice(0, 5).join(',') || '无'}；缺失=${missing.length} 个（正常）· 产品 ${expected.size} / SDK ${actual.size}`
     );
     check(
       '包含当前宿主实际使用的模型 deepseek-v4.1-flash',
@@ -389,9 +479,9 @@ async function main() {
   }
   console.log(`\nℹ️ 迁移前备份保留在：${path.relative(PROJECT, backup)}`);
   console.log(
-    before.schemaVersion >= 6
-      ? 'ℹ️ 真实库已是 v6（此前已迁移过）'
-      : 'ℹ️ 真实库尚未迁移 —— 用户启动服务时会自动执行（v5 → v6）'
+    before.schemaVersion >= EXPECTED_SCHEMA_VERSION
+      ? `ℹ️ 真实库已是 v${EXPECTED_SCHEMA_VERSION}（此前已迁移过）`
+      : `ℹ️ 真实库尚未迁移（当前 v${before.schemaVersion}）—— 用户启动服务时会自动迁到 v${EXPECTED_SCHEMA_VERSION}`
   );
 }
 
@@ -406,7 +496,11 @@ main()
       }
     }
     const failed = results.filter(r => !r.ok);
-    console.log(`\n===== 汇总：${results.length - failed.length}/${results.length} 通过 =====`);
+    console.log(
+      `\n===== 汇总：${results.length - failed.length}/${results.length} 通过` +
+        (skippedCount ? ` · ${skippedCount} 项因环境前提不足被跳过` : '') +
+        ' ====='
+    );
     for (const f of failed) console.log(`  ❌ ${f.name} —— ${f.detail}`);
     process.exit(failed.length ? 1 : 0);
   });

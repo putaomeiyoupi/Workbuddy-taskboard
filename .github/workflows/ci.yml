@@ -42,6 +42,13 @@ jobs:
       - name: lockfile 守卫
         run: node scripts/check-lockfile.mjs
 
+      # 🔴 2026-09-16 补（审计 C-M2）：本地 pre-commit **可以**被
+      #   `git commit --no-verify` 显式绕过，网页端 / GitHub 直推更是完全不经过它。
+      #   这里用 `--all` 扫「全部已跟踪 + 未忽略的文件」，把绕过的口子堵在 CI 这层。
+      #   纯静态检查、不依赖 node_modules ⇒ 放在 `npm ci` 之前快速失败。
+      - name: 误提交与密钥扫描（防绕过本地 hook）
+        run: node scripts/check-commit.mjs --all
+
       # 用 ci 而不是 install：严格按 lockfile 装，避免"本地能过 CI 过不了"
       - name: 安装依赖
         run: npm ci
@@ -54,14 +61,36 @@ jobs:
       - name: 构建前端
         run: npm run build
 
-      # 以下四个都是纯离线自检，不碰网络、不碰宿主数据：
+      # 以下都是纯离线自检，不碰网络、不碰宿主数据：
       #   check-hook-order      —— React hook 顺序守卫
       #   check-host-readonly   —— 宿主库只读铁律守卫
       #   verify-repeat         —— 定期循环（纯函数）用例
       #   verify-countdown-text —— 倒计时文案用例
+      #   verify-board-rules    —— **看板归类规则**（纯函数，无需起服务）
+      #                            它 import 的是 `.ts`，这里靠 Node ≥22.18 的
+      #                            **默认类型剥离**直接跑（`.nvmrc` = 24，已在同版本实测通过）
       - name: 守卫与用例
         run: |
           node scripts/check-hook-order.mjs
           node scripts/check-host-readonly.mjs
           node scripts/verify-repeat.mjs
           node scripts/verify-countdown-text.mjs
+          node scripts/verify-board-rules.ts
+
+      # 🔴 2026-09-16 补（审计 H5）：下面这两个脚本**此前从不被执行** ——
+      #    原先 ci.yml 与 check.cmd 都只跑上面那批，它们只在 CHANGELOG 里被称作「用例」，
+      #    于是形成"看着有覆盖、实际零门禁"的错觉。
+      #    两者都自带 CHAT_DB_PATH 与独立端口（会 spawn 一个隔离实例），不碰真实库、不碰宿主。
+      #      verify-repeat-api         —— 定期循环 HTTP 入口校验（39 项）
+      #      verify-repeat-integration —— v7 迁移断言 + 调度集成（40 项）
+      - name: 循环接口与集成冒烟
+        run: |
+          # api 冒烟自身不 import 服务端模块（它是 spawn 一个 tsx 子进程去跑 server），
+          # 所以 `node` 直接跑即可。
+          node scripts/verify-repeat-api.mjs
+          # ⚠️ integration 会 `import('../server/db.ts')`，而服务端模块内部用的是
+          #    `'./scopes.js'` 这类「TS 源码 + .js 后缀」写法（由 tsc/tsx 负责解析）。
+          #    Node 原生 ESM **不会**把 .js 映射回 .ts ⇒ 必须经 tsx 运行，
+          #    否则报 `ERR_MODULE_NOT_FOUND: .../server/scopes.js`
+          #    （2026-09-16 在 Node 24 实测；同一个脚本用 tsx 跑则 40 项全过）。
+          node node_modules/tsx/dist/cli.mjs scripts/verify-repeat-integration.mjs

@@ -260,7 +260,7 @@ export type RepeatSpec = PeriodicSpec | IntervalSpec;
 /**
  * 任务执行者。
  *
- * ⚠️ `'workbuddy'`（交给宿主执行）**已下线**。
+ * ⚠️ `'workbuddy'`（交给宿主执行）**已下线**，见 `内部归档`。
  * 之所以保留在联合类型里：**历史任务数据**仍可能是它，界面需要如实展示。
  * 新任务的执行者只会是 `'local'`。
  */
@@ -411,8 +411,8 @@ export interface HostSnapshot {
 }
 
 // ⚠️ 2026-09-15：原先这里还有 CLI 桥接层的三个类型（`CliBridgeStatus` / `CliJob` /
-// `CliDispatchContext`）。CLI 派发通道已下线，全库已无引用 ⇒ 一并移除。
-// 需要时从 内部归档 里可恢复对应形状。
+// `CliDispatchContext`）。CLI 派发通道已下线（见 `内部归档`），全库已无引用 ⇒ 一并移除。
+// 需要时可从内部归档里恢复对应形状。
 
 /** 全局设置 */
 export interface AppSettings {

@@ -10,14 +10,14 @@ import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { exec } from "child_process";
-import { promisify } from "util";
 import * as db from "./db.js";
 import * as hostAdapter from "./hostAdapter.js";
 import type { HostSnapshot } from "./hostAdapter.js";
 import * as authSetup from "./authSetup.js";
 import * as envConfig from "./envConfig.js";
 import * as workspaceSync from "./workspaceSync.js";
+// 对外错误信息的路径脱敏（审计 M4）—— 见 redact.ts 顶部说明
+import { safeErrorMessage } from "./redact.js";
 import { getWorkbuddyModelCatalog, describeCatalogSources } from "./modelCatalog.js";
 import { serializeTask, parseProgressLog } from "./taskView.js";
 import { getOccupancy } from "./hostOccupancy.js";
@@ -53,8 +53,6 @@ import {
 // streamFollowup：运行中追加指令（抽屉底部输入框）
 import { resolveTaskApproval, cancelTaskApproval, streamFollowup } from "./taskRunner.js";
 
-const execAsync = promisify(exec);
-
 // 待处理的权限请求
 interface PendingPermission {
   resolve: (result: PermissionResult) => void;
@@ -74,10 +72,108 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+/**
+ * 监听端口。
+ * ⚠️ 必须显式转成 number 并校验 —— `app.listen(port, hostname, callback)` 这个重载
+ *    **只接受 number**。原先的 `app.listen(PORT, cb)`（单参数重载）容忍 `string | number`，
+ *    所以直到我们加上 host 参数，TS 才报 TS2769。非法值一律回落到 3000。
+ */
+const parsedPort = Number(process.env.PORT ?? 3000);
+const PORT =
+  Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 3000;
+
+/**
+ * 监听地址 —— **默认仅本机回环**。
+ *
+ * 🔴 2026-09-16 修（审计 H1「局域网零鉴权」）：
+ *   此前是 `app.listen(PORT)` —— **不带 host**，Node 的语义是监听**所有网卡**。
+ *   叠加「全站无鉴权」（全局中间件只有 `express.json()`），等于把整个控制面
+ *   暴露给局域网：`POST /api/chat` 接受请求体里的 `cwd` 与 `permissionMode`
+ *   （前端设置页**确实**提供 `bypassPermissions` 选项，是有意的产品功能），
+ *   于是局域网内任意主机都能让本机**在任意目录、跳过全部权限检查**地
+ *   执行 Agent 工具调用 —— 变相远程代码执行。
+ *   项目自己的 `内部文档` 早已书面记录「现在是
+ *   0.0.0.0 且无鉴权」并列为待办。
+ *
+ * ✅ 绑回环**不影响宿主加载**：宿主扩展的 iframe 指向
+ *   `http://127.0.0.1:<port>/index.html`。
+ *
+ * ⚠️ 确需局域网访问（比如手机看板）时，显式设 `KANBAN_HOST=0.0.0.0` ——
+ *    但要明白那等于**主动重新打开**这个攻击面：此时请务必自行加前置鉴权。
+ */
+const HOST = (process.env.KANBAN_HOST || '127.0.0.1').trim();
+
+/** 日志里展示用的地址：通配地址回退成 localhost（保持启动框对齐） */
+const DISPLAY_HOST = HOST === '0.0.0.0' || HOST === '::' ? 'localhost' : HOST;
 
 // 所有路由统一挂在 /api 下：避免 /api/tasks/stream 被 /api/tasks/:id 这类同前缀路由抢先匹配导致 404
 const api = express.Router();
+
+/**
+ * 访问来源守卫（**必须排在所有业务中间件之前**）
+ * ============================================================
+ * 🔴 2026-09-16 加（审计 H1）。它和 `app.listen(PORT, HOST)` 绑回环是**一对**：
+ *   绑回环挡住「局域网里别的机器」，本守卫挡住「本机浏览器里的**别的站点**」。
+ *
+ * 做两件事：
+ *   ① **Host 头**必须是回环别名 —— 防 **DNS rebinding**
+ *      （攻击者把自有域名解析到 127.0.0.1，再用自己的域名当 Host 打过来，
+ *        此时 TCP 上确实连的是本机，光靠绑回环挡不住）
+ *   ② 带 **Origin** 时必须是本机来源 —— 防 **CSRF**
+ *      （恶意网页用 `<form method=POST>` 或 `no-cors fetch` 打 127.0.0.1；
+ *        这类**跨站**请求浏览器一定会带 Origin，所以这里查得到）
+ *
+ * ⚠️ 为什么「**没有** Origin 就放行」：
+ *   本机脚本（curl、`verify-*.mjs`、start.cmd 探活、`open-browser.mjs`）
+ *   本来就不带 Origin，而它们与本机用户**同权**（能读 `.env`、能 spawn 进程），
+ *   拦它们没有安全收益，只会把自家工具链一起打死。
+ *   —— 这与 docs 里对 CDP 调试口「本机全权、无法靠鉴权消除」的判断一致；
+ *      本守卫**不声称**能防住本机进程，只消除「远程 / 跨站」这两条路径。
+ *
+ * ⚠️ 只比对 **hostname、不比对端口**：这样 Vite dev（:5173 经 proxy 转发）、
+ *   生产（:47831）、`localhost` 与 `127.0.0.1` 两种写法都能用。
+ *   放宽到任意本机端口是刻意的 —— 恶意页面不可能来自本机来源。
+ */
+/** 回环别名（`[::1]` 是 `URL.hostname` 对 IPv6 字面量的形态，方括号要留住） */
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+
+/** 本次允许的来源名 = 回环别名 ∪ 自定义监听地址 */
+const ALLOWED_SOURCE_NAMES = new Set(LOOPBACK_NAMES);
+ALLOWED_SOURCE_NAMES.add(HOST.toLowerCase());
+
+/** 取 `host[:port]` 的 hostname 部分（IPv6 字面量带方括号） */
+function hostNameOf(value: string): string {
+  const s = value.trim().toLowerCase();
+  const m = s.match(/^(\[[^\]]+\]|[^:]+)/);
+  return m ? m[1] : s;
+}
+
+/** Origin 是否是本机来源（无法解析的值如 `"null"` 一律拒绝） */
+function originAllowed(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    return ALLOWED_SOURCE_NAMES.has(u.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+app.use((req, res, next) => {
+  const hostHeader = String(req.headers.host || '');
+  if (hostHeader && !ALLOWED_SOURCE_NAMES.has(hostNameOf(hostHeader))) {
+    return res.status(403).json({
+      error: '拒绝访问：Host 不在允许范围内（本看板默认仅接受本机回环访问）',
+    });
+  }
+
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin.length > 0 && !originAllowed(origin)) {
+    return res.status(403).json({ error: '拒绝访问：请求来源不被允许' });
+  }
+
+  next();
+});
 
 // Middleware
 app.use(express.json());
@@ -144,7 +240,7 @@ api.get("/check-login", (_req, res) => {
     res.json(authSetup.checkPassive());
   } catch (error: any) {
     console.error("[Check Login] 被动检查失败:", error);
-    res.status(500).json({ error: error?.message || String(error) });
+    res.status(500).json({ error: safeErrorMessage(error) });
   }
 });
 
@@ -190,7 +286,7 @@ api.get("/env-config", (_req, res) => {
     res.json(envConfig.describeEnvState());
   } catch (error: any) {
     console.error("[Env Config] 读取失败:", error);
-    res.status(500).json({ error: error?.message || String(error) });
+    res.status(500).json({ error: safeErrorMessage(error) });
   }
 });
 
@@ -286,14 +382,14 @@ api.post("/save-env-config", (req, res) => {
 //    用它派发会得到 `400 model [...] service info not found`。
 //
 // （原先这里还优先返回 WorkBuddy 产品配置的模型目录、取不到再回落宿主观测值；
-//   workbuddy 执行器已下线，回落函数 `buildModelsFallback`
+//   workbuddy 执行器已下线，见 内部归档，回落函数 `buildModelsFallback`
 //   与 `markRecommended` 一并移除。）
 api.get("/models", async (req, res) => {
   /**
    * 模型清单 = Agent SDK 能跑的模型（本地执行器的实际能力）。
    *
    * ⚠️ 原先还按 executor 区分「WorkBuddy 宿主能接的模型」并给常用项打标记 ——
-   * workbuddy 执行器已下线⇒ 现在只有这一份清单。
+   * workbuddy 执行器已下线（见 内部归档）⇒ 现在只有这一份清单。
    */
   const executor = 'local';
 
@@ -347,7 +443,7 @@ api.get("/sessions", (req, res) => {
     res.json({ sessions: sessionsWithMessages });
   } catch (error: any) {
     console.error("[Sessions] Error:", error);
-    res.status(500).json({ error: error?.message || "获取会话失败" });
+    res.status(500).json({ error: safeErrorMessage(error, "获取会话失败") });
   }
 });
 
@@ -372,7 +468,7 @@ api.get("/sessions/:sessionId", (req, res) => {
     res.json({ session, messages: parsedMessages });
   } catch (error: any) {
     console.error("[Session] Error:", error);
-    res.status(500).json({ error: error?.message || "获取会话失败" });
+    res.status(500).json({ error: safeErrorMessage(error, "获取会话失败") });
   }
 });
 
@@ -394,7 +490,7 @@ api.post("/sessions", (req, res) => {
     res.json({ session });
   } catch (error: any) {
     console.error("[Create Session] Error:", error);
-    res.status(500).json({ error: error?.message || "创建会话失败" });
+    res.status(500).json({ error: safeErrorMessage(error, "创建会话失败") });
   }
 });
 
@@ -413,7 +509,7 @@ api.patch("/sessions/:sessionId", (req, res) => {
     res.json({ success: true });
   } catch (error: any) {
     console.error("[Update Session] Error:", error);
-    res.status(500).json({ error: error?.message || "更新会话失败" });
+    res.status(500).json({ error: safeErrorMessage(error, "更新会话失败") });
   }
 });
 
@@ -430,7 +526,7 @@ api.delete("/sessions/:sessionId", (req, res) => {
     res.json({ success: true });
   } catch (error: any) {
     console.error("[Delete Session] Error:", error);
-    res.status(500).json({ error: error?.message || "删除会话失败" });
+    res.status(500).json({ error: safeErrorMessage(error, "删除会话失败") });
   }
 });
 
@@ -782,7 +878,8 @@ api.post("/chat", async (req, res) => {
     console.error(`[Chat] Error Stack:`, error?.stack);
     console.error(`[Chat] Full Error:`, JSON.stringify(error, null, 2));
     
-    const errorMessage = error?.message || "处理请求时发生错误";
+    // ⚠️ 这条会经 SSE 回给客户端 ⇒ 同样要脱敏（审计 M4）
+    const errorMessage = safeErrorMessage(error, "处理请求时发生错误");
     res.write(`data: ${JSON.stringify({ type: "error", message: errorMessage })}\n\n`);
     res.end();
   }
@@ -1115,7 +1212,7 @@ api.post("/tasks", (req, res) => {
     priority,
     scheduled_at,
     depends_on,
-    // 注：请求体里的 executor 已忽略 —— workbuddy 执行器下线后只剩本地执行器
+    // 注：请求体里的 executor 已忽略 —— workbuddy 执行器下线后只剩本地执行器（见 内部归档）
     isolation,
     scopes,
     // 定期循环（只作用于看板自建任务；宿主定时任务仍只读）
@@ -1129,7 +1226,7 @@ api.post("/tasks", (req, res) => {
     return res.status(400).json({ error: "title 与 prompt 为必填项" });
   }
 
-  // 独立工作树此前只有 workbuddy 执行器实现过，该执行器已下线
+  // 独立工作树此前只有 workbuddy 执行器实现过，该执行器已下线（见 内部归档）
   // ⇒ 现在没有任何执行器会真正创建独立目录，声明 worktree 必须在入口挡掉，
   //   否则会出现「调度器放开了互锁、实际却没有隔离」的并发写风险。
   if (isolation === "worktree") {
@@ -1414,7 +1511,7 @@ api.delete("/tasks/:id", (req, res) => {
 //   · `GET  /api/worktrees`（工作树概览）
 //   · `POST /api/tasks/:id/cleanup-worktree`（手动回收）
 // 独立工作树（`isolation: 'worktree'`）已不可用 —— 它原先只有 CLI 派发通道实现过，
-// 该通道已下线⇒ `server/worktree.ts` 一并归档。
+// 该通道已下线（见 `内部归档`）⇒ `已归档的独立工作树模块` 一并归档。
 // ⚠️ `tasks.worktree_path` **列保留**（历史数据仍在，删列需迁移），只是不再有写入方。
 
 // ---------- 任务状态流转 ----------
@@ -1472,7 +1569,7 @@ api.post("/tasks/:id/cancel", async (req, res) => {
       console.warn(`[API] 取消任务 ${task.id} 时未找到执行句柄`);
     }
 
-    // workbuddy 执行器已下线⇒ 不存在「宿主侧 job」需要停。
+    // workbuddy 执行器已下线（见 内部归档）⇒ 不存在「宿主侧 job」需要停。
     // 原先这里会按 executor 分情况调 cliBridge.stopJob，现在只剩看板侧一种情形。
     const hostDetail = '看板侧已停止';
 
@@ -1868,7 +1965,7 @@ api.get("/host/snapshot", (req, res) => {
     console.error("[Host] snapshot 失败:", error);
     res.status(500).json({
       available: false,
-      error: error?.message || "读取宿主数据失败",
+      error: safeErrorMessage(error, "读取宿主数据失败"),
       hostDir: "",
       workspaces: [],
       workingSessions: [],
@@ -1904,7 +2001,7 @@ api.get("/host/task-items", (req, res) => {
 
 // ============================================================
 // Agent SDK 可用性 —— 本地执行器的前置条件
-// （原「CLI 桥接 API」整段已下线）
+// （原「CLI 桥接 API」整段已下线，见 内部归档）
 // ============================================================
 
 /**
@@ -1925,10 +2022,10 @@ api.get("/sdk/status", async (req, res) => {
 //
 // ⚠️ 原先这里还有一批「就地操作」（回复实例 / 重启实例 / 停止实例 / 读取实例对话原文 /
 // 手动派发 job），它们都走 WorkBuddy 官方 REST 的 CLI 通道。该通道已下线
-// ⇒ 本区段现在**全部是只读端点**。
+// （见 内部归档）⇒ 本区段现在**全部是只读端点**。
 // ⚠️ 2026-09-15：原先这里还有 `GET /api/host/op-log` —— 宿主写操作流水
 // （「上次提交到底成没成」的事后可查）。CLI 派发通道下线后**已无任何写入方**，
-// 端点与 `server/hostOpLog.ts` 一并移除。
+// 端点与 `server/hostOpLog.ts` 一并移除。详见 内部归档
 
 // ---------- 自动化定时任务 ----------
 //
@@ -2003,18 +2100,28 @@ if (fs.existsSync(distDir)) {
   });
 }
 
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
   console.log(`
 ╔════════════════════════════════════════════╗
 ║                                            ║
 ║     ◉ 任务看板服务器已启动                  ║
 ║                                            ║
-║     地址: http://localhost:${PORT}            ║
+║     地址: http://${DISPLAY_HOST}:${PORT}            ║
 ║     数据库: ${path.relative(process.cwd(), db.DB_FILE_PATH) || db.DB_FILE_PATH}
 ║     调度器: WSML-P (tick ${TICK_INTERVAL_MS}ms)      ║
 ║                                            ║
 ╚════════════════════════════════════════════╝
   `);
+
+  // 监听范围必须显式告知：绑定 0.0.0.0 时用户应当知道自己暴露了什么
+  if (LOOPBACK_NAMES.has(HOST.toLowerCase())) {
+    console.log(`[Net] 仅监听本机回环（${HOST}:${PORT}）—— 局域网无法访问 ✅`);
+  } else {
+    console.warn(
+      `[Net] ⚠️ 正在监听 ${HOST}:${PORT} —— **局域网内其它机器可访问且本服务无鉴权**，` +
+      '仅在你清楚风险（并已加前置鉴权）时使用 KANBAN_HOST'
+    );
+  }
 
   // 宿主（WorkBuddy）连通性自检：只读，失败仅告警不阻断启动
   const hostStatus = hostAdapter.isHostAvailable();
@@ -2034,6 +2141,24 @@ app.listen(PORT, () => {
       `[Runtime] 已清理继承自宿主的环境变量: ${strippedEnv.join(', ')}` +
       '（CLI 会拿 SERVER__PORT 当监听端口，保留会导致子进程端口撞车）'
     );
+  }
+
+  /**
+   * 🔴 2026-09-16 加（审计 M6 的收尾）：补一次「孤儿 run」修复。
+   *
+   * 见 `db.repairDanglingRuns` —— 修的是「任务早已离开执行态、run 却仍开着」的
+   * 历史遗留（旧版的 `in_progress → todo` 回退不会关 run）。**幂等**，
+   * 正常库上返回 0、什么都不改。
+   */
+  try {
+    const repaired = db.repairDanglingRuns();
+    if (repaired > 0) {
+      console.log(
+        `[DB] 已收尾 ${repaired} 条遗留执行记录（任务早已离开执行态、run 却仍开着）`
+      );
+    }
+  } catch (err: any) {
+    console.warn('[DB] 收尾遗留 run 失败（不影响启动）:', err?.message ?? err);
   }
 
   // 服务器就绪后启动调度引擎

@@ -24,11 +24,29 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # 🔴 2026-09-16 修（审计 C-M3）：原先硬编码 `'22'`，而 `.nvmrc` = 24、
+          #    `package.json` 的 engines 要求 `>=24` —— 发布产物与声明的引擎不一致
+          #    （提交 e5c5088「统一到 Node 24 单一版本」改一处漏一处）。
+          #    改用与 ci.yml **同一个真源**（`.nvmrc`），此后不会再漂移。
+          node-version-file: '.nvmrc'
           cache: npm
+
+      # ⚠️ 必须放在 `npm ci` **之前**，原因同 ci.yml：
+      #    本机 npm 会给其它平台的原生可选依赖写下没有 version 的占位条目，
+      #    Windows 能忍，但 **Linux 的 `npm ci` 直接报 `npm error Invalid Version:`**。
+      #    若不先跑守卫，就只剩一条难以定位的安装失败。
+      #    release 由 tag 触发、**不经过 ci.yml**（后者只监听 main/master 的 push 与 PR），
+      #    所以这道闸必须自带。
+      - name: lockfile 守卫
+        run: node scripts/check-lockfile.mjs
 
       - name: 安装依赖
         run: npm ci
+
+      # 同理：发布前也要过一次类型检查 —— tag 推送不会触发 ci.yml 的 job。
+      # 宁可发布失败，也不要发一个类型都过不了的产物出去。
+      - name: 类型检查
+        run: npm run typecheck
 
       - name: 构建前端
         run: npm run build

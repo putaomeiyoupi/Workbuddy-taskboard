@@ -20,6 +20,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+// 路径安全校验（防 id 里的 `..` 逃出宿主目录）—— 见 hostId.ts 顶部说明
+import { isSafeHostId, isInsideDir } from './hostId.js';
 
 export interface QuestionOption {
   label: string;
@@ -94,11 +96,23 @@ const MAX_READ_BYTES = 4 * 1024 * 1024;
 
 /** 在 projects/<slug>/ 下找到该会话的 jsonl */
 function locateTranscript(sessionId: string): string | null {
+  /**
+   * 🔴 2026-09-16 加（审计 M1）：`sessionId` 来自 URL
+   * （`GET /api/host/sessions/:id/transcript`），此处必须先过路径安全校验。
+   *
+   * 不加的话：`sessionId = "../../secret"` 会让下面第 2 行拼出
+   * `projects/<slug>/../../secret.jsonl` —— `path.join` 把 `..` 规范化掉，
+   * 于是读到了宿主 `projects/` **之外**的任意 `*.jsonl`。
+   */
+  if (!isSafeHostId(sessionId)) return null;
+
   const base = path.join(hostDir(), 'projects');
   try {
     for (const d of fs.readdirSync(base, { withFileTypes: true })) {
       if (!d.isDirectory()) continue;
       const file = path.join(base, d.name, `${sessionId}.jsonl`);
+      // 纵深防御：即便上面的白名单将来被放宽，也不允许落在 projects/ 之外
+      if (!isInsideDir(base, file)) continue;
       if (fs.existsSync(file)) return file;
     }
   } catch {

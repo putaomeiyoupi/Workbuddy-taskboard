@@ -243,7 +243,7 @@ const MIGRATIONS: Migration[] = [
     version: 1,
     description: 'tasks 扩展列：executor / host_session_id / host_job_id / isolation / worktree_path / wait_reason / run_state',
     up: () => {
-        // 任务由谁执行。'workbuddy'（派发给宿主）已下线 ⇒ 只剩 'local'
+        // 任务由谁执行。'workbuddy'（派发给宿主）已下线，见 内部归档 ⇒ 只剩 'local'
         ensureColumn('tasks', 'executor', `executor TEXT NOT NULL DEFAULT 'local'`, '本地执行器');
         // 关联的宿主会话 id（workbuddy 执行器写入）
         ensureColumn('tasks', 'host_session_id', `host_session_id TEXT`, 'workbuddy 会话');
@@ -254,7 +254,7 @@ const MIGRATIONS: Migration[] = [
         // ⚠️ 已无写入方（CLI 派发通道下线后不再有宿主 job）；列保留供历史数据展示。
         ensureColumn('tasks', 'host_job_id', `host_job_id TEXT`, '宿主 job id（历史数据）');
         // 隔离模式：'shared' = 直接在工作空间目录里改（默认，配合工作空间互锁串行）。
-        // ⚠️ 'worktree' 已不可用（原实现依赖已下线的 CLI 派发通道），
+        // ⚠️ 'worktree' 已不可用（原实现依赖已下线的 CLI 派发通道，见 内部归档），
         //    但类型与列都保留 —— 历史数据里可能仍是 'worktree'，删列需要迁移。
         ensureColumn('tasks', 'isolation', `isolation TEXT NOT NULL DEFAULT 'shared'`, `默认 shared`);
         // 实际使用的工作树路径。**已无写入方**（worktree 模式不可用），列保留供历史数据展示。
@@ -680,7 +680,7 @@ export interface DbWorkspace {
 }
 
 /**
- * 任务执行者。'workbuddy'（派发给 WorkBuddy 宿主）已下线
+ * 任务执行者。'workbuddy'（派发给 WorkBuddy 宿主）已下线，见 `内部归档`
  * ⇒ 新建任务只会是 `'local'`。
  *
  * ⚠️ 历史数据里仍可能存在 `'workbuddy'` 字面值；调度器已不再按 executor 分支，
@@ -692,8 +692,8 @@ export type TaskExecutor = 'local';
  * 隔离模式。
  * - `shared`  ：直接在工作空间目录里改（默认）。配合工作空间互锁，同空间任务串行，
  *               好处是成果就在用户自己的工作目录里。
- * - `worktree`：⚠️ **当前不可用**。原实现（`server/worktree.ts`）只有已下线的 CLI 派发通道
- *               用过，模块已归档到 内部归档；
+ * - `worktree`：⚠️ **当前不可用**。原实现（`已归档的独立工作树模块`）只有已下线的 CLI 派发通道
+ *               用过，模块已归档到 `内部归档`；
  *               `POST /api/tasks` 对 `isolation: 'worktree'` 直接返回 400，不会静默降级。
  *
  * ⚠️ 类型里保留 `'worktree'` 是为了**如实读取历史数据**，不代表仍可使用。
@@ -965,6 +965,31 @@ export function deleteWorkspace(id: string): boolean {
   return stmt.run(id).changes > 0;
 }
 
+/**
+ * **原子地**「把任务改挂到另一个空间 + 删除原空间」。
+ *
+ * 🔴 2026-09-16 加（审计 M3）：`workspaceSync.applyWorkspaceSync` 原先依次调用
+ *    `reassignTasksWorkspace(...)` 再 `deleteWorkspace(...)` —— **两次独立调用**。
+ *    中途抛错（库被锁、磁盘满、进程被杀）就会留下半成品：
+ *    **任务已经改挂走了，原空间却还留着** —— 用户看到空间还在、里面却空了，
+ *    而任务已经悄悄挂到别的空间名下，全程没有任何提示。
+ *
+ *    这两步语义上必须同生共死，所以包进一个事务。
+ *
+ * @returns `reassigned` 改挂的任务数；`deleted` 原空间是否真的被删掉
+ */
+export function reassignAndDeleteWorkspace(
+  fromId: string,
+  toId: string
+): { reassigned: number; deleted: boolean } {
+  const tx = db.transaction((from: string, to: string) => {
+    const reassigned = reassignTasksWorkspace(from, to);
+    const deleted = deleteWorkspace(from);
+    return { reassigned, deleted };
+  });
+  return tx(fromId, toId) as { reassigned: number; deleted: boolean };
+}
+
 // ============= 任务操作 =============
 
 export function getAllTasks(): DbTask[] {
@@ -1106,7 +1131,19 @@ export function updateTask(id: string, updates: Partial<TaskUpdatableFields>): b
 
     if (open) {
       const now = new Date().toISOString();
-      const isTerminal = updates.status !== undefined && isTerminalStatus(updates.status);
+      /**
+       * 这次 run 是否应当在本轮更新里**收尾**。
+       *
+       * 🔴 2026-09-16 修（审计 M6）：原先只判 `isTerminalStatus`（done/failed/cancelled），
+       *    于是 **`in_progress → todo` 这条回退路径**（孤儿回收、`/tasks/:id/to-todo`、
+       *    决策回退）**不会关掉已开启的 run** ⇒ 该 run 永远 `finished_at = NULL`，
+       *    执行历史里不断堆积「永不完结的一次执行」。
+       *
+       *    正确语义：**一次 run = 一次执行**。只要任务**不再是 `in_progress`**，
+       *    这次执行就结束了 —— 无论它是正常终态，还是被回退到 todo / scheduled。
+       *    （`status` 未传、或仍为 `in_progress` ⇒ 只是阶段变化，不收尾。）
+       */
+      const leavingRunning = updates.status !== undefined && updates.status !== 'in_progress';
       const setParts: string[] = ['updated_at = ?'];
       const vals: unknown[] = [now];
 
@@ -1135,7 +1172,7 @@ export function updateTask(id: string, updates: Partial<TaskUpdatableFields>): b
         setParts.push('host_job_id = ?');
         vals.push(updates.host_job_id);
       }
-      if (isTerminal) {
+      if (leavingRunning) {
         setParts.push('finished_at = ?');
         vals.push(now);
       }
@@ -1146,6 +1183,32 @@ export function updateTask(id: string, updates: Partial<TaskUpdatableFields>): b
   }
 
   return changed;
+}
+
+/**
+ * 幂等修复：把「任务早已离开 `in_progress`、但 run 仍然开着」的历史遗留收尾。
+ *
+ * 🔴 2026-09-16 加（审计 M6 的收尾）。原因见 `updateTask` 里 `leavingRunning` 的注释：
+ *    在此之前 `in_progress → todo` 这条回退路径**不会关 run**，而留下的
+ *    `finished_at = NULL` **不会自行消失** —— 任务状态不再变化，就再也没有机会触发收尾。
+ *    所以要在启动时补一次。
+ *
+ * 收尾时间取该任务的 `finished_at`，取不到就退到 run 自己的 `updated_at`。
+ * **完全幂等**：只补 `finished_at IS NULL` 的行，重复执行不会改动任何数据。
+ *
+ * @returns 实际修复的 run 条数（供启动日志展示）
+ */
+export function repairDanglingRuns(): number {
+  const stmt = db.prepare(`
+    UPDATE task_runs
+       SET finished_at = COALESCE(
+             (SELECT t.finished_at FROM tasks t WHERE t.id = task_runs.task_id),
+             updated_at
+           )
+     WHERE finished_at IS NULL
+       AND task_id IN (SELECT id FROM tasks WHERE status <> 'in_progress')
+  `);
+  return stmt.run().changes;
 }
 
 export function deleteTask(id: string): boolean {
@@ -1357,6 +1420,29 @@ export function countTasksByStatuses(statuses: TaskStatus[]): number {
   const stmt = db.prepare(`SELECT COUNT(*) as cnt FROM tasks WHERE status IN (${placeholders})`);
   const row = stmt.get(...statuses) as { cnt: number };
   return row.cnt;
+}
+
+/**
+ * 统计**真正在跑**的任务数（`in_progress` 且**不在等人**）—— 槽位占用要用这个。
+ *
+ * 🔴 2026-09-16 加（审计 M5）。原先槽位判定用的是 `countTasksByStatuses(['in_progress'])`，
+ *    而「等人工授权」的任务 status **仍然是 `in_progress`**（只是 `run_state='waiting_approval'`），
+ *    于是它们照样占着整机槽位 ⇒ 几个任务同时卡在等授权时，`scheduler` 会在
+ *    「整机占用已满」那一处直接 return —— **没有实际并发，却整个停摆**。
+ *
+ *    宿主侧本来就是「只算 `working`、**不算 `pending`**」（见 hostOccupancy.ts：
+ *    pending 是"等人回答，没有在消耗机器"）⇒ 两侧口径原本不对称，这里对齐到宿主侧。
+ *
+ * ⚠️ `run_state='uncertain'`（结果待核对）**仍然计入** —— 那时执行器状态未知、
+ *    目录锁必须保持，不能当成"空闲"。
+ */
+export function countTasksRunningNow(): number {
+  const stmt = db.prepare(
+    `SELECT COUNT(*) as cnt FROM tasks
+      WHERE status = 'in_progress'
+        AND (run_state IS NULL OR run_state <> 'waiting_approval')`
+  );
+  return (stmt.get() as { cnt: number }).cnt;
 }
 
 /** 查询所有已到触发时间的定时任务 */

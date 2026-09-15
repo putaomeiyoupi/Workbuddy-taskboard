@@ -113,12 +113,22 @@ echo [10] countdown text cases:
 "%NODE_EXE%" "node_modules\tsx\dist\cli.mjs" "scripts\verify-countdown-text.mjs"
 echo.
 
+rem Board classification rules: task -> column mapping, the host "is it waiting
+rem for a human" signals, and terminal-state colours. Pure functions, no server
+rem needed. Added 2026-09-16 (audit H5) - this file previously had NO runner at
+rem all, so a regression in column mapping would have shipped silently.
+rem (The two heavier suites - verify-repeat-api / -integration - spawn isolated
+rem  instances and run in CI instead of here.)
+echo [11] board classification rules:
+"%NODE_EXE%" "node_modules\tsx\dist\cli.mjs" "scripts\verify-board-rules.ts"
+echo.
+
 rem Lockfile integrity. A machine-local npm quirk writes version-less
 rem placeholder entries for other platforms optional binaries
 rem (e.g. {"dev":true,"optional":true}). Windows tolerates it, but
 rem "npm ci" on Linux dies with "npm error Invalid Version:".
 rem Symptom: local steps all green, GitHub Actions all red at "npm ci".
-echo [11] lockfile integrity:
+echo [12] lockfile integrity:
 "%NODE_EXE%" "scripts\check-lockfile.mjs"
 echo.
 echo ============================================

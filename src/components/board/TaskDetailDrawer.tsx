@@ -173,7 +173,7 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
    *
    * ⚠️ 只对**看板自己执行的任务**有效（agent 由看板 spawn，句柄在本进程内）。
    *   · WB 的会话做不到（不在我们进程里，其提问绑定在宿主会话运行时上）
-   *   · 历史 `workbuddy` 任务不行 —— 那条 host_job_id 通道已下线
+   *   · 历史 `workbuddy` 任务不行 —— 那条 host_job_id 通道已下线（见 内部归档）
    */
   const canFollowup =
     !!onFollowup &&
@@ -201,6 +201,28 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
   }, [logs.length, task?.status]);
 
   const handleClose = requestClose;
+
+  /**
+   * 统一的「**成功才提示**」包装。
+   *
+   * 🔴 2026-09-16 修（精读 A-H1）：这些 action 由 `useTasks.makeAction` 提供，
+   *    而它**失败时 `return null` 而不抛异常**（原因写进 hook 的 `error` state）。
+   *    原先所有调用点都写成 `await onXxx(); MessagePlugin.success(...)` ——
+   *    **失败也会弹「已取消执行」**，与同屏冒出来的错误提示直接矛盾。
+   *    典型的"假装成功"：用户看到成功，实际什么都没发生。
+   *
+   * 这里统一判返回值：成功（truthy）才 success，否则给一条**可操作**的失败提示
+   * （具体原因由 hook 的 `error` state 承载）。
+   */
+  const runAction = async (
+    run: () => Promise<unknown>,
+    okText: string,
+    failText = '操作未成功，请重试或查看任务错误信息'
+  ) => {
+    const ok = await run();
+    if (ok) MessagePlugin.success(okText);
+    else MessagePlugin.error(failText);
+  };
 
   /**
    * 发送跟进。
@@ -232,9 +254,19 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
       setTranscript(null); // 再点一次收起
       return;
     }
+    /**
+     * 🔴 2026-09-16 修（精读 A-H3）：记下"这次请求是给**哪个任务**的"。
+     *
+     * `task` 是本次渲染的闭包变量，`await` 之后**不会变** —— 若用户在请求返回前
+     * 切到了另一张卡，旧结果回来时直接 `setTranscript` 就会把
+     * **A 的明细显示在 B 的标题下**。所以要用 `lastTaskIdRef`
+     * （由上面的 reset effect 在每次换任务时更新）复核"现在还是不是它"。
+     */
+    const requestedFor = task.id;
     setTranscriptLoading(true);
     try {
-      const r = await onFetchTranscript(task.id);
+      const r = await onFetchTranscript(requestedFor);
+      if (lastTaskIdRef.current !== requestedFor) return; // 已经切走 ⇒ 丢弃这次结果
       if (r?.ok) {
         setTranscript(r.updates ?? []);
       } else {
@@ -247,13 +279,20 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
 
   const handleDecision = async () => {
     if (!task) return;
+    // 入口级防重（精读 A-M3）：按钮的 disabled 依赖状态及时落到 DOM，回车连发仍可能进两次
+    if (submitting) return;
     if (!decisionInput.trim()) {
       MessagePlugin.warning('请填写决策内容');
       return;
     }
     setSubmitting(true);
     try {
-      await onSubmitDecision(task.id, decisionInput.trim());
+      // 失败时**保留输入**并提示 —— 用户填了一段话，不该因为一次失败就被清掉
+      const ok = await onSubmitDecision(task.id, decisionInput.trim());
+      if (!ok) {
+        MessagePlugin.error('决策提交失败，请重试（已保留你填的内容）');
+        return;
+      }
       MessagePlugin.success('决策已提交，任务回到待办队列');
       setDecisionInput('');
     } finally {
@@ -268,7 +307,13 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
       {/* 遮罩 */}
       <div
         className="fixed inset-0 z-[1100]"
-        style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)' }}
+        /**
+         * ⚠️ 2026-09-16：**去掉 `backdropFilter: 'blur(2px)'`**（与 HostDrawer 同因）。
+         *   全屏毛玻璃在宿主里每帧重算整个视口的模糊 —— 宿主实测打开抽屉
+         *   p50 从 16.7ms 恶化到 300ms（3.2fps）。
+         *   失去模糊后背景会显得"太清晰"、抢聚焦 ⇒ 用**不透明度**补偿（0.55 → 0.68）。
+         */
+        style={{ background: 'rgba(0,0,0,0.68)' }}
         onClick={handleClose}
       />
 
@@ -488,10 +533,7 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
           {isExecuting(task) && (
             <Popconfirm
               content="取消后任务将被标记为失败，可稍后重试。确认取消？"
-              onConfirm={async () => {
-                await onCancel(task.id);
-                MessagePlugin.success('已取消执行');
-              }}
+              onConfirm={() => runAction(() => onCancel(task.id), '已取消执行')}
             >
               <Button size="small" variant="outline" theme="danger" icon={<Square size={12} />}>
                 取消执行
@@ -504,10 +546,9 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
               size="small"
               variant="outline"
               icon={<RotateCcw size={12} />}
-              onClick={async () => {
-                await onRetry(task.id);
-                MessagePlugin.success('已重新排入待办');
-              }}
+              onClick={() =>
+                runAction(() => onRetry(task.id), '已重新排入待办')
+              }
             >
               重试
             </Button>
@@ -518,10 +559,9 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
               size="small"
               variant="outline"
               icon={<RotateCcw size={12} />}
-              onClick={async () => {
-                await onRetry(task.id);
-                MessagePlugin.success('已重新排入待办');
-              }}
+              onClick={() =>
+                runAction(() => onRetry(task.id), '已重新排入待办')
+              }
             >
               重新入队
             </Button>
@@ -532,10 +572,9 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
               size="small"
               variant="outline"
               icon={<Play size={12} />}
-              onClick={async () => {
-                await onTriggerNow(task.id);
-                MessagePlugin.success('已立即触发，进入待办队列');
-              }}
+              onClick={() =>
+                runAction(() => onTriggerNow(task.id), '已立即触发，进入待办队列')
+              }
             >
               立即执行
             </Button>
@@ -546,10 +585,7 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
               size="small"
               variant="outline"
               icon={<ArrowLeft size={12} />}
-              onClick={async () => {
-                await onMoveToTodo(task.id);
-                MessagePlugin.success('已移回待办');
-              }}
+              onClick={() => runAction(() => onMoveToTodo(task.id), '已移回待办')}
             >
               移回待办
             </Button>
@@ -596,8 +632,10 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
               onClick={async () => {
                 setSubmitting(true);
                 try {
-                  await onToggleRepeatPause(task.id, !repeatPaused);
-                  MessagePlugin.success(repeatPaused ? '已恢复循环' : '已暂停循环');
+                  await runAction(
+                    () => onToggleRepeatPause(task.id, !repeatPaused),
+                    repeatPaused ? '已恢复循环' : '已暂停循环'
+                  );
                 } finally {
                   setSubmitting(false);
                 }
@@ -620,8 +658,7 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
               onConfirm={async () => {
                 setSubmitting(true);
                 try {
-                  await onClearRepeat(task.id);
-                  MessagePlugin.success('已关闭循环');
+                  await runAction(() => onClearRepeat(task.id), '已关闭循环');
                 } finally {
                   setSubmitting(false);
                 }
@@ -636,7 +673,12 @@ export const TaskDetailDrawer: React.FC<TaskDetailDrawerProps> = ({
           <Popconfirm
             content="删除后不可恢复（含执行记录）。确认删除？"
             onConfirm={async () => {
-              await onDelete(task.id);
+              // 删除失败时**不能**关抽屉 —— 否则用户会以为删掉了，实际还在
+              const ok = await onDelete(task.id);
+              if (!ok) {
+                MessagePlugin.error('删除失败，请重试或查看任务错误信息');
+                return;
+              }
               handleClose();
               MessagePlugin.success('任务已删除');
             }}

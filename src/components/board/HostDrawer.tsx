@@ -11,7 +11,7 @@
  *
  * ⚠️ 2026-09-15：原先这里还能「回复 / 继续 / 停止 / 重启实例」，走 CodeBuddy CLI 的
  * `--serve` REST + ACP 通道。该通道已整体下线 —— 理由是看板已嵌入宿主界面、
- * 宿主原生 UI 就在旁边，在这里复刻一套对话操作属重复造轮子。
+ * 宿主原生 UI 就在旁边，在这里复刻一套对话操作属重复造轮子（见 `内部归档`）。
  * ⇒ 要作答 / 派发，请直接用 WorkBuddy。
  *
  * ⚠️ 宿主库始终**只读**。
@@ -95,7 +95,7 @@ interface HostDrawerProps {
   /**
    * ⚠️ 2026-09-15：原先这里还有 7 个**写侧** props（onReply / onRespawn / onStop /
    * onResume / onContinue / onLoadTranscript / onRefresh）与 opLogs 流水。
-   * CLI 派发通道已下线⇒ 全部移除，本抽屉现在**只读**。
+   * CLI 派发通道已下线（见 `内部归档`）⇒ 全部移除，本抽屉现在**只读**。
    */
 }
 
@@ -136,7 +136,7 @@ function stateView(target: HostTarget): {
     };
   }
   // ⚠️ 2026-09-15：原先这里还有一整个 `if (job)` 分支（实例状态 → 展示文案），
-  // 随 CLI 派发通道下线一并移除。状态只看宿主会话。
+  // 随 CLI 派发通道下线一并移除（见 内部归档）。状态只看宿主会话。
   if (session) {
     if (session.status === 'working') {
       return { label: '宿主执行中', color: '#a78bfa', icon: <Loader2 size={13} className="host-card__spin" /> };
@@ -164,7 +164,7 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
 }) => {
   // ⚠️ 2026-09-15：原先这里还有一批**写侧 state**（reply / resumeText / busy /
   // transcript / transcriptLoading / resumedJob）。CLI 派发通道已下线
-  // ⇒ 本抽屉现在**只读**，这些状态全部移除。
+  // （见 内部归档）⇒ 本抽屉现在**只读**，这些状态全部移除。
   const lastKeyRef = useRef<string | null>(null);
   /** 宿主侧的待选择提问（AskUserQuestion）与最近对话 */
   const [pendingQuestions, setPendingQuestions] = useState<PendingQuestion[]>([]);
@@ -183,7 +183,7 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
 
   // ⚠️ 2026-09-15：原先这里还有 `lastOp`（按目标会话/实例查「最近一次宿主操作」，
   // 用于事后确认"到底提交没提交"）。CLI 派发通道已下线 ⇒ 不再有任何写操作，
-  // opLogs 也没有写入方，一并移除。
+  // opLogs 也没有写入方，一并移除（见 内部归档）。
 
   /**
    * ⚠️ 关闭动画 hook **必须放在下面的 `if (!target) return null` 之前**。
@@ -279,7 +279,7 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
   const sessionId = session?.id || '';
   const cwd = session?.cwd;
   // ⚠️ 2026-09-15：原先这里还有 job / awaiting / jobActive / jobTerminal / canResume
-  // （「继续这个对话」的前置判定）。CLI 派发通道已下线
+  // （「继续这个对话」的前置判定）。CLI 派发通道已下线（见 内部归档）
   // ⇒ 本抽屉只读，这些判定与依赖它们的 handler / UI 一并移除。
 
   const handleClose = requestClose;
@@ -298,7 +298,14 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
     <>
       <div
         className="fixed inset-0 z-[1100]"
-        style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(2px)' }}
+        /**
+         * ⚠️ 2026-09-16：**去掉 `backdropFilter: 'blur(2px)'`**。
+         *   全屏毛玻璃在宿主里是「每帧对整个视口重算高斯模糊」——宿主实测
+         *   （Chromium 138 / Electron 37，视口 2296×1362 @DPR1.5）打开抽屉时
+         *   p50 = 300ms（3.2fps），去掉后 16.7ms。
+         *   失去模糊后背景会显得"太清晰"、抢聚焦 ⇒ 用**不透明度**补偿（0.55 → 0.68）。
+         */
+        style={{ background: 'rgba(0,0,0,0.68)' }}
         onClick={handleClose}
       />
 
@@ -339,7 +346,7 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
         <div className="task-drawer-body">
         {/* ⚠️ 2026-09-15：「上次提交的结果」条（宿主写操作流水 lastOp）随 CLI 派发通道
             下线一并移除 —— 本抽屉已无写操作，也没有 opLogs 的写入方。
-             */}
+            详见 内部归档 */}
 
         {/* 宿主会话：查看**完整记录**（整页只读，路由 `/host-session/:id`）。
             抽屉里只展示「待选择提问 + 最近对话 + 活动流」，要看全部对话与工具调用就点这里。
@@ -521,7 +528,7 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
 
         {/* ⚠️ 2026-09-15：「执行通道未连接」提示（serveRunning / serviceError）随
             CLI 派发通道下线移除 —— 本抽屉已无写操作，不存在"通道没连所以会失败"。
-             */}
+            详见 内部归档 */}
 
         {/* 上下文信息 */}
         {!automation && (
@@ -552,7 +559,7 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
             没有它，用户只看到"继续这个对话"却不知道要回答什么。
 
             ⚠️ 2026-09-15：原先这里还能**就地作答**（选项按钮 / 「其它答复」输入框 /
-            提交按钮），走的是 CLI + ACP 通道。该通道已下线
+            提交按钮），走的是 CLI + ACP 通道。该通道已下线（见 内部归档）
             ⇒ 只保留**只读展示**：告诉你"它在问什么、有哪些选项"，作答请回 WorkBuddy。 */}
         {pendingQuestions.length > 0 && (
           <div className="px-4 pt-3.5">
@@ -676,11 +683,11 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
         {/* ⚠️ 2026-09-15：「这个实例卡住了」面板（REPLY_PRESETS 一键确认 + 直接回复）
             随 CLI 派发通道下线移除。它在等什么、有哪些选项，改由上面的
             「WorkBuddy 正在等你选择」只读面板展示；作答请回 WorkBuddy 桌面端。
-             */}
+            详见 内部归档 */}
 
         {/* ⚠️ 2026-09-15：「操作区」整块移除 —— 原先有 5 个按钮：
             继续这个对话 / 停止实例 / 重启实例 / 打开预览 / 查看对话原文，
-            全部依赖 CLI 实例（job）与 serve 通道。该通道已下线
+            全部依赖 CLI 实例（job）与 serve 通道。该通道已下线（见 内部归档）
             ⇒ 本抽屉现在是**只读**的：看信息、看它在问什么、看实时活动流，不代你操作。 */}
 
         </div>

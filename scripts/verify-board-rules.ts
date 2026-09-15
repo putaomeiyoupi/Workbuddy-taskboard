@@ -8,6 +8,10 @@
  *  4. 终态配色不被「已完成」列的统一色盖掉
  *
  * 运行：<node> node_modules/tsx/dist/cli.mjs scripts/verify-board-rules.ts
+ *
+ * ✅ 2026-09-16 起**已接入门禁**：`ci.yml` 的「守卫与用例」与 `check.cmd` 的 [11] 都会跑它。
+ *    （此前它**没有任何执行点** —— 见审计 H5。纯函数、零依赖，接进来几乎没有成本；
+ *      在 CI 里靠 Node ≥22.18 的默认类型剥离直接 `node x.ts` 即可。）
  */
 import {
   columnOf,

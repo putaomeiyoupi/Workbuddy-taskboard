@@ -21,6 +21,8 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+// 路径安全校验（防 id 里的 `..` 逃出宿主 tasks/ 目录）—— 见 hostId.ts 顶部说明
+import { isSafeHostId, isInsideDir } from './hostId.js';
 
 /** 宿主根目录：优先 CODEBUDDY_CONFIG_DIR，回退 ~/.workbuddy */
 function resolveHostDir(): string {
@@ -532,10 +534,20 @@ export function getLatestAutomationRuns(): Record<string, HostAutomationRun> {
 export function getHostTaskItems(sessionId?: string): HostTaskItem[] {
   if (!fs.existsSync(HOST_TASKS_DIR)) return [];
 
+  /**
+   * 🔴 2026-09-16 加（审计 M1）：`sessionId` 来自 query
+   * （`GET /api/host/task-items?sessionId=…`）。不校验的话，`sessionId=../../..`
+   * 会让 `path.join` 逃出宿主 `tasks/` 目录，进而遍历任意目录、
+   * 读出其中所有含 `subject` 字段的 `*.json`。
+   */
+  if (sessionId !== undefined && !isSafeHostId(sessionId)) return [];
+
   let dirs: string[];
   try {
     dirs = sessionId
-      ? [path.join(HOST_TASKS_DIR, sessionId)].filter(d => fs.existsSync(d))
+      ? [path.join(HOST_TASKS_DIR, sessionId)]
+          .filter(d => isInsideDir(HOST_TASKS_DIR, d)) // 纵深防御
+          .filter(d => fs.existsSync(d))
       : fs
           .readdirSync(HOST_TASKS_DIR)
           .map(d => path.join(HOST_TASKS_DIR, d))

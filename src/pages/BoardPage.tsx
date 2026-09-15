@@ -158,7 +158,7 @@ export const BoardPage: React.FC<BoardPageProps> = ({
    *
    * ⚠️ 2026-09-15：原先这里还有一整套「CLI 实例（job）」派生逻辑 ——
    * 把 job 按「等人 / 在执行」拆开、据此把 SessionCard 分到待决策、以及 resume 后
-   * 把抽屉切到新实例。CLI 派发通道已下线⇒ job 这层整体移除。
+   * 把抽屉切到新实例。CLI 派发通道已下线（见 `内部归档`）⇒ job 这层整体移除。
    *
    * 🔑 宿主「待决策」**不受影响**：它来自 `host.awaitingSessions`（宿主 `status='pending'`），
    * 与 CLI job 从来是两条独立来源 —— 删 job 不会让待决策列变空。
@@ -191,6 +191,16 @@ export const BoardPage: React.FC<BoardPageProps> = ({
     },
     [tasks]
   );
+
+  /**
+   * 选中任务（打开详情抽屉）。
+   *
+   * ⚠️ 必须用 `useCallback` 定住引用：这个函数会一路透传到 `TaskCard` 的 memo 比较里。
+   *    之前这里传的是 inline 箭头 `onSelectTask={t => setSelectedTaskId(t.id)}`，
+   *    **每次渲染都是新引用** ⇒ `TaskCard` 的 memo 恒定失效、全部卡片一起重渲染。
+   *    （审计 H4；`setSelectedTaskId` 来自 `useState`，本身引用稳定，依赖数组留空是安全的。）
+   */
+  const handleSelectTask = useCallback((t: Task) => setSelectedTaskId(t.id), []);
 
   /**
    * 统计各板块数量（列键由 BOARD_COLUMNS 驱动，新增列不需要改这里）。
@@ -555,7 +565,7 @@ export const BoardPage: React.FC<BoardPageProps> = ({
             tasks={tasks}
             selectedTaskId={selectedTaskId}
             getBlockedBy={getBlockedBy}
-            onSelectTask={t => setSelectedTaskId(t.id)}
+            onSelectTask={handleSelectTask}
             onMoveTask={handleMoveTask}
             hostCards={{
               // 出错会话放「待办」：需要人过一眼；不会自动调度（见 hostErrored 注释）
@@ -567,7 +577,7 @@ export const BoardPage: React.FC<BoardPageProps> = ({
                 />
               )),
               // 宿主正在跑的会话
-              // （原先这里还排在最前面的「CLI 实例卡」已随派发通道下线移除）
+              // （原先这里还排在最前面的「CLI 实例卡」已随派发通道下线移除，见 内部归档）
               running: hostWorking.map(s => (
                 <HostSessionCard
                   key={`host-${s.id}`}

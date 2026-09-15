@@ -117,8 +117,22 @@ export function isSchedulerRunning(): boolean {
  * 返回是否找到并成功中止了执行句柄。
  */
 export function abortRunningTask(taskId: string): boolean {
+  /**
+   * 🔴 2026-09-16 修（审计 L2）：**先解除挂起中的人工授权**。
+   *
+   * 任务在等授权时，`canUseTool` 返回的 Promise 挂在 `pendingApprovals` 里
+   * （见 taskRunner）。原先这里只调 `handle.abort()` —— 而 `abortController.abort()`
+   * **不保证**会 reject 那个挂起的 Promise ⇒ 它可能一直悬着，直到
+   * `PERMISSION_TIMEOUT`（5 分钟）才自行 resolve 成 deny。
+   * taskRunner 早就提供了 `cancelTaskApproval` 专门干这件事，只是这里没接上。
+   *
+   * ⚠️ 放在 `handle` 检查**之前**：即便句柄已经不在了（例如刚跑完被摘掉），
+   *    挂起的授权也应当一并解除。
+   */
+  const hadApproval = cancelTaskApproval(taskId, '任务已被中止');
+
   const handle = runningHandles.get(taskId);
-  if (!handle) return false;
+  if (!handle) return hadApproval;
   try {
     handle.abort();
   } catch (err) {
@@ -291,9 +305,28 @@ export function runTick(): string[] {
       // 判据与 index.ts 的守卫共用 db.PARKED_RUN_STATES（唯一真源，别在本地另写一份）
       if (PARKED_RUN_STATES.includes(task.run_state as import('./db.js').TaskRunState)) continue;
 
-      // 进程已退出 ⇒ 可安全回退到待办。
-      // （原先这里还要先核对 workbuddy 任务在宿主侧的真实结果，该执行器已下线，
-      //   「2026-09 · CLI 派发通道」）
+      /**
+       * 进程已退出 ⇒ 可安全回退到待办。
+       * （原先这里还要先核对 workbuddy 任务在宿主侧的真实结果，该执行器已下线，
+       *   见 内部归档「2026-09 · CLI 派发通道」）
+       *
+       * 🔴 **2026-09-16 审计 M8：这个假设有一个已知不成立的情形，本轮刻意不修。**
+       *
+       *    它假设「看板进程重启」⇒「它 spawn 的执行器子进程也已退出」。
+       *    但执行器是 `spawn` 出来的**独立 CLI 子进程**：看板被杀（Ctrl+C / `taskkill`）
+       *    **不会连带杀掉它**，子进程可能仍在写同一份工作目录。
+       *    此时我们把任务立刻回退成 todo、调度器再派发一次 ⇒ **同目录双写**。
+       *
+       *    为什么本轮不修：根治需要**按 PID 识别"哪些子进程是看板派的"**，
+       *    而 SDK 的 `query()` 不暴露子进程 PID（我们只能传 `executable`）。
+       *    没有可靠判据就去杀进程，风险（**误杀宿主自己的执行器**）远大于收益。
+       *
+       *    影响面被两件事削弱：① 工作空间互锁要求同空间串行；
+       *    ② 它需要「看板被杀 + 子进程存活 + 立刻重新派发 + 恰好写同一批文件」同时成立。
+       *
+       *    后续要修的正确方向：**记录子进程 PID（或引入一层 wrapper 脚本）**，
+       *    启动时按 PID 精确清理并二次确认 —— 不要靠猜。
+       */
       console.warn(`[Scheduler] 发现孤儿 running 任务，回退为待办: ${task.title} (${task.id})`);
       updateTask(task.id, {
         status: 'todo',
@@ -414,7 +447,7 @@ export function runTick(): string[] {
         }
 
         // 独立工作树（isolation='worktree'）此前**只有** workbuddy 执行器实现过，
-        // 该执行器已下线⇒ 现在没有任何执行器会创建独立目录，
+        // 该执行器已下线（见 内部归档）⇒ 现在没有任何执行器会创建独立目录，
         // 因此一律走工作空间互锁，避免「放开了互锁但没隔离」的并发写风险。
         const wsRunning = countTasksInWorkspace(ws.id, ['in_progress'], 'shared');
         if (wsRunning >= ws.max_concurrency) {
@@ -445,6 +478,29 @@ export function runTick(): string[] {
 // ============================================================
 
 function startTask(task: DbTask): void {
+  /**
+   * 🔴 2026-09-16 修（审计 L1）：**先确认执行目录，再落库为「进行中」**。
+   *
+   * 顺序很要紧。原先的顺序是「先写 `in_progress`，再取 workspace」，而取不到时
+   * `cwd` 是 `undefined`、一路传到 `taskRunner` 的 `cwd || process.cwd()`
+   * ⇒ 任务会**在看板自己的源码目录里执行**。那不是"默认位置"，
+   * 而是**给 agent 机会去改看板自身**。
+   *
+   * 现在的兜底顺序：任务指定的空间 → **默认工作空间**（启动时由
+   * `ensureDefaultWorkspace()` 保证至少存在一个）→ 都没有就**拒绝启动**。
+   * 宁可任务停住并给出可读原因，也不要在错误的目录里跑。
+   */
+  const workspace = task.workspace_id ? getWorkspace(task.workspace_id) : getAllWorkspaces()[0];
+  if (!workspace) {
+    updateTask(task.id, {
+      status: 'todo',
+      run_state: null,
+      error: '未指定工作空间，已阻止启动（请先创建或选择一个工作空间）',
+    });
+    console.warn(`[Scheduler] ⚠️ 无可用工作空间，已阻止启动: ${task.title} (${task.id})`);
+    return;
+  }
+
   const startedAt = new Date().toISOString();
 
   // 先落库为进行中，再启动执行器（避免竞态：同 tick 内被重复选中）
@@ -463,9 +519,8 @@ function startTask(task: DbTask): void {
 
   const runningTask = getTask(task.id);
 
-  const workspace = task.workspace_id ? getWorkspace(task.workspace_id) : undefined;
-  const cwd = workspace?.path;
-  const wsName = workspace?.name ?? '（无工作空间）';
+  const cwd = workspace.path;
+  const wsName = workspace.name;
 
   console.log(
     `[Scheduler] ▶ 启动任务: ${task.title} | 空间=${wsName} | 模型=${task.model} | 执行者=${task.executor}`
@@ -476,7 +531,7 @@ function startTask(task: DbTask): void {
     workspaceName: wsName,
   });
 
-  // 只有本地执行器一条路径了（workbuddy 执行器已下线）
+  // 只有本地执行器一条路径了（workbuddy 执行器已下线，见 内部归档）
   if (isSdkKnownUnavailable()) {
     // 本机 Agent SDK 不可用（CLI 非交互模式挂起）→ 立即失败并给出可行动提示，
     // 不要白等一个 60s 的超时周期。详见 server/sdkStatus.ts
@@ -523,8 +578,26 @@ function startTaskViaLocalSdk(task: DbTask, cwd: string | undefined): void {
        *    这条 run 会永远挂着 `finished_at=NULL`，执行历史里出现"永不完结的一次执行"。
        */
       const after = getTask(task.id);
+      /**
+       * 🔴 2026-09-16 修（审计 H2 的后半）：用户**主动终止**过的循环任务，
+       * **不再排下一轮**。
+       *
+       * 此前这里只判 `repeat_mode`、**完全不看本轮终态** —— 于是用户点了「终止」，
+       * 任务先被记成 `done`（假成功，见 taskRunner 的修复），
+       * 紧接着 `rescheduleRepeatAfterRun` 照样把下一轮排上：
+       * 用户以为已经停了，它还在跑。
+       *
+       * ⚠️ **只对 `cancelled` 短路**：它代表「用户明确表达了停止意图」。
+       *    普通 `failed`（超时、模型报错、网络抖动）**仍然续排** ——
+       *    那是定期任务的 cron 语义，砍掉会破坏「每隔 N 分钟重试一次」的用法。
+       *    （只想跳过本次的用户，应在授权对话框里选「拒绝 / 跳过」而不是「终止」。）
+       */
       if (after && normalizeRepeatMode(after.repeat_mode) !== 'none') {
-        rescheduleRepeatAfterRun(task.id, new Date(finishedAt));
+        if (after.status === 'cancelled') {
+          console.log(`[Scheduler] ○ 循环停止（用户终止，不再排下一轮）: ${after.title}`);
+        } else {
+          rescheduleRepeatAfterRun(task.id, new Date(finishedAt));
+        }
       }
       const finalTask = getTask(task.id);
       console.log(

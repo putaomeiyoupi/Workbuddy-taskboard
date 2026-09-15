@@ -8,6 +8,16 @@
  *  - resume / reply / job 详情这条通路要真的通（用不存在的 id 验证通路 + 报错可读，无副作用）
  *
  * 运行：<node> node_modules/tsx/dist/cli.mjs scripts/verify-board-backend.ts
+ *
+ * ✅ 2026-09-16 已**按现状重写断言**（审计 H5 的收尾），实测 **18/18 通过**（原 5 项失败全部消除）：
+ *    · CLI 代理通路（`/api/cli/jobs|resume|reply`）**已随该通道整体下线**、路由不存在
+ *      ⇒ 原先「验通路 + 缺参数 400」的 4 条断言改为**回归守卫**：断言一律 404。
+ *        哪天有人把端点加回来，这里会立刻变红，提醒必须补齐配套的参数校验与权限断言。
+ *    · 「空库占用」那条原要求 `total > 0`（即宿主此刻有任务在跑）—— 那是**外部环境状态**，
+ *      宿主空闲时必然失败、还会把人误导到"占用统计坏了"；改为只断言**看板侧**为 0
+ *      （宿主口径自洽另有「合计 = 看板 + 宿主」覆盖）。
+ * ⚠️ 仍**不进 CI**：它断言的宿主并发占用依赖**本机真实宿主数据**（`~/.workbuddy`），
+ *    CI 上没有 ⇒ 它定位为**本机验收脚本**。
  */
 import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
@@ -138,10 +148,20 @@ async function main() {
     oc1?.total === oc1?.boardRunning + oc1?.hostRunning,
     `total=${oc1?.total} board=${oc1?.boardRunning} host=${oc1?.hostRunning}`
   );
+  /**
+   * ⚠️ 2026-09-16 按现状重写（审计 H5 的收尾）：
+   *   原断言是 `boardRunning === 0 && total > 0`，后半句要求**宿主此刻有任务在跑**
+   *   —— 那属于**外部环境状态**，不是本看板的契约。宿主空闲时 total 本来就是 0，
+   *   实测下这条必然失败，而失败信息（`board=0 total=0`）还会把人误导到"占用统计坏了"。
+   *
+   *   本脚本真正该保证的契约是「空库 ⇒ **看板侧**占用为 0」；
+   *   宿主侧口径是否自洽，已由上面那条「占用合计 = 看板 + 宿主」覆盖。
+   *   故这里只断言看板侧，并把 host/total 一并打进 detail 便于观察。
+   */
   check(
-    '空库里看板占用为 0 而合计不为 0 —— 数字确实随 WorkBuddy 的任务变化',
-    oc1?.boardRunning === 0 && (oc1?.total ?? 0) > 0,
-    `board=${oc1?.boardRunning} total=${oc1?.total}`
+    '空库里看板占用为 0（宿主侧是否 >0 取决于宿主当前状态，不作为判据）',
+    oc1?.boardRunning === 0,
+    `board=${oc1?.boardRunning} host=${oc1?.hostRunning} total=${oc1?.total}`
   );
 
   // ---- 去重：看板派发出去的会话不能再算一次 ----
@@ -209,39 +229,35 @@ async function main() {
     db2.close();
   }
 
-  // ---- CLI 代理通路（用不存在的 id 验证「通路 + 报错可读」，无副作用）----
+  // ---- CLI 代理通路：**已随 CLI 派发通道整体下线** ----
+  //
+  // ⚠️ 2026-09-16 按现状重写（审计 H5 的收尾）：
+  //   这段原先断言 `/api/cli/jobs/:id` 的「可读错误」、`/api/cli/resume` 的
+  //   「通路已打通」、以及 resume/reply 的「缺参数 → 400」。但 CLI 派发通道随后
+  //   **整体下线**（见 `内部归档`），这些路由已经**不存在** ——
+  //   实测 `grep '"/cli/' server/index.ts` 为空，全部返回 404。
+  //
+  //   ⇒ 保留这段的价值从「验通路」变成**回归守卫**：哪天有人把这些端点加回来，
+  //     这里会立刻变红，提醒必须补上配套的参数校验与权限断言，而不是让它悄悄复活。
   const before = await occupiedServePorts();
   const noJob = await getJson('/api/cli/jobs/this-job-does-not-exist');
   check(
-    '查询不存在的实例 → 返回可读错误（而不是挂起或 500）',
-    noJob.status >= 400 && typeof noJob.body?.error === 'string' && noJob.body.error.length > 0,
-    `status=${noJob.status} error=${String(noJob.body?.error).slice(0, 90)}`
-  );
-
-  const badResume = await postJson('/api/cli/resume', {
-    sessionId: '00000000-0000-0000-0000-000000000000',
-  });
-  const resumeAccepted = badResume.status === 200 && badResume.body?.ok === true;
-  const resumeRejected = badResume.status >= 400 && !!badResume.body?.error;
-  check(
-    'resume 通路已打通（官方 API 可达；不挂起、不 500、返回可解析结果）',
-    resumeAccepted || resumeRejected,
-    `status=${badResume.status} body=${JSON.stringify(badResume.body).slice(0, 150)}`
-  );
-  if (resumeAccepted) {
-    // 实测记录：官方对「不存在的 sessionId」也返回 200（后端读不到 body.job 的细节），
-    // 且**没有新建宿主会话**（已用只读查询核对）——所以不算副作用，但界面必须能显示"无 job 返回"。
-    console.log(
-      '   ℹ️ 官方对未知 sessionId 返回 200；已核对宿主库：未新建任何会话（无副作用）'
-    );
-  }
-  check(
-    'resume 缺少 sessionId → 400（参数校验）',
-    (await postJson('/api/cli/resume', {})).status === 400
+    '[已下线] GET /api/cli/jobs/:id → 404（不是挂起，也不是 500）',
+    noJob.status === 404,
+    `status=${noJob.status}`
   );
   check(
-    'reply 空文本 → 400（参数校验）',
-    (await postJson('/api/cli/jobs/abc/reply', { text: '   ' })).status === 400
+    '[已下线] POST /api/cli/resume → 404',
+    (await postJson('/api/cli/resume', { sessionId: '00000000-0000-0000-0000-000000000000' }))
+      .status === 404
+  );
+  check(
+    '[已下线] POST /api/cli/resume 缺 sessionId → 404（整条路由已不存在，不再有 400 分支）',
+    (await postJson('/api/cli/resume', {})).status === 404
+  );
+  check(
+    '[已下线] POST /api/cli/jobs/:id/reply → 404',
+    (await postJson('/api/cli/jobs/abc/reply', { text: '   ' })).status === 404
   );
 
   // 收尾：把本次测试拉起的 serve 关掉，避免留下孤儿进程

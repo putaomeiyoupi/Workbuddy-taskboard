@@ -112,7 +112,7 @@ export function HostSessionChatView() {
          *   本页在会话运行中每 2.5s 轮询一次；`fetch().json()` 每次都是新引用，
          *   无条件 setState 会让整页（含几百行活动流）每 2.5 秒重渲染一次。
          *   实测教训：Edge 153 在"大 DOM + 周期性整树重渲染"下会崩渲染进程
-         *   （STATUS_ACCESS_VIOLATION）—— 见 本机渲染压力探针 的说明。
+         *   （STATUS_ACCESS_VIOLATION）—— 见 scripts/probe-render-storm.py 的说明。
          *   会话真的在动时 transcript 内容会变，判重不会吞掉真实更新。
          */
         const sig = JSON.stringify(tJson) + '\u0001' + JSON.stringify(sJson?.session ?? null);

@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { HostDiagHUD } from './components/HostDiagHUD';
 import { APP_CONFIG } from './config';
 import { installAutoReload } from './utils/autoReload';
 import 'tdesign-react/esm/style/index.js';
@@ -21,6 +22,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
       <App />
+      {/* 宿主嵌入环境的性能诊断浮层：只在 iframe 内渲染（普通浏览器看不到） */}
+      <HostDiagHUD />
     </BrowserRouter>
   </React.StrictMode>,
 );

@@ -441,4 +441,4 @@ export const HostAutomationCard = memo(
 
 // ⚠️ 2026-09-15：本文件末尾原先还有「CLI job 卡片」（CliJobCard / CliJobCardProps /
 // jobVisual）—— 那是 WorkBuddy 官方执行通道的实时实例卡，该通道已下线
-// ⇒ 整块移除。宿主会话与自动化卡片不受影响。
+// （见 内部归档）⇒ 整块移除。宿主会话与自动化卡片不受影响。

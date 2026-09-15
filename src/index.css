@@ -745,8 +745,23 @@ t-chat-sender::part(send-btn):disabled,
   overflow: hidden;
   border-radius: 10px;
   border: 1px solid var(--hairline);
-  background: linear-gradient(180deg, rgba(18, 26, 42, 0.72), rgba(10, 14, 24, 0.72));
-  backdrop-filter: blur(6px);
+  /* ⚠️ 2026-09-16 去掉 backdrop-filter: blur(6px)。
+     宿主实测（Chromium 138 / Electron 37.10.3，视口 2296×1362 @DPR1.5 ≈ **700 万像素**）：
+     大面积模糊会退化成**逐帧全屏重算** —— 打开抽屉时 p50 达 300ms（3.2fps），
+     去掉后恢复 16.7ms（约 **19 倍**）。详见 MEMORY「宿主毛玻璃」一节。
+     🔴 但质感**不能靠"提高不透明度"来补偿**（第一版就是这么改的，被用户否掉："没有以前高级了"）。
+     元素级 A/B 截图证实：`blur` 在大面积纯色上几乎不产生视觉差异（有/无模糊两张逐像素相近），
+     真正变平的元凶是 **alpha 0.72 → 0.90** —— 它挡住了 `.board-surface` 的**径向光晕**（蓝紫辉光），
+     列于是从"透着光的玻璃"变成"死黑的块"。
+     ⇒ 正解：① **保留原来的半透明度**（背景网格 alpha 仅 0.07，没有模糊也不会"花"）；
+              ② 用**静态光栅化**补玻璃质感（下列三层都只光栅化一次，每帧零合成成本）：
+                 顶部镜面高光 / 内侧漫反射柔光 / 下沉投影。 */
+  background:
+    linear-gradient(180deg, rgba(210, 228, 250, 0.038), rgba(210, 228, 250, 0.008) 18%, transparent 38%),
+    linear-gradient(180deg, rgba(18, 26, 42, 0.72), rgba(10, 14, 24, 0.78));
+  box-shadow:
+    inset 0 1px 0 rgba(205, 228, 255, 0.06),
+    0 14px 34px -20px rgba(0, 0, 0, 0.95);
   transition: border-color 0.25s, box-shadow 0.25s;
 }
 
@@ -1179,8 +1194,13 @@ t-chat-sender::part(send-btn):disabled,
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--hairline);
-  background: linear-gradient(180deg, #0b111d 0%, #070b14 100%);
-  box-shadow: -18px 0 48px -12px rgba(0, 0, 0, 0.8);
+  /* 顶部镜面高光：全屏遮罩去掉毛玻璃后，靠它维持抽屉的层次感（静态，零合成成本） */
+  background:
+    linear-gradient(180deg, rgba(170, 200, 240, 0.05), rgba(170, 200, 240, 0.01) 18%, transparent 42%),
+    linear-gradient(180deg, #0b111d 0%, #070b14 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(200, 225, 255, 0.06),
+    -18px 0 48px -12px rgba(0, 0, 0, 0.85);
 }
 
 @keyframes drawer-in {
@@ -1434,8 +1454,15 @@ t-chat-sender::part(send-btn):disabled,
 .board-panel {
   border-radius: 10px;
   border: 1px solid var(--hairline);
-  background: linear-gradient(180deg, rgba(18, 26, 42, 0.86), rgba(10, 14, 24, 0.86));
-  backdrop-filter: blur(8px);
+  /* 同 .board-column：去掉 backdrop-filter 后**保留原来的半透明度** ——
+     不要提高 alpha，那会挡住背景的径向光晕、显得死黑（2026-09-16 实测结论）。
+     玻璃质感改由静态光栅化补：顶部高光 / 内侧漫反射柔光 / 下沉投影。 */
+  background:
+    linear-gradient(180deg, rgba(210, 228, 250, 0.033), rgba(210, 228, 250, 0.007) 16%, transparent 36%),
+    linear-gradient(180deg, rgba(18, 26, 42, 0.86), rgba(10, 14, 24, 0.9));
+  box-shadow:
+    inset 0 1px 0 rgba(205, 228, 255, 0.055),
+    0 12px 30px -18px rgba(0, 0, 0, 0.9);
 }
 
 /* 数值强调 */
