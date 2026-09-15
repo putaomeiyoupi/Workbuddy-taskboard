@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# 提交前安全检查（版本化，通过 core.hooksPath 生效）
+# ============================================================
+# 启用方式（克隆仓库后执行一次）：
+#     git config core.hooksPath .githooks
+#
+# 检查逻辑见 scripts/check-commit.mjs，规则集中在那处维护。
+#
+# 注意：hook 由 Git 直接调起，不会经过用户的 shell 配置，
+# 所以 node 可能不在这条进程的 PATH 里（Windows 上很常见）。
+# 这里先尽力定位 node，实在找不到才放行并给出提示 ——
+# 直接让 hook 报 "node: not found" 会卡死所有提交，反而更糟。
+
+# ---- 定位 node ----
+NODE_BIN=""
+
+if command -v node >/dev/null 2>&1; then
+  NODE_BIN="node"
+fi
+
+if [ -z "$NODE_BIN" ] && [ -n "$KANBAN_NODE" ] && [ -x "$KANBAN_NODE" ]; then
+  NODE_BIN="$KANBAN_NODE"
+fi
+
+if [ -z "$NODE_BIN" ]; then
+  # WorkBuddy 自带的 node（Windows: node.exe，类 Unix: node）
+  for d in "$HOME"/.workbuddy/binaries/node/versions/*/ ; do
+    if [ -x "$d/node.exe" ]; then NODE_BIN="$d/node.exe"; break; fi
+    if [ -x "$d/node" ]; then NODE_BIN="$d/node"; break; fi
+  done
+fi
+
+if [ -z "$NODE_BIN" ]; then
+  echo ""
+  echo "⚠️  未找到 node，已跳过提交前检查。"
+  echo "    建议把 node 加入 PATH，或用 KANBAN_NODE 指定其完整路径。"
+  echo ""
+  exit 0
+fi
+
+# ---- 运行检查 ----
+"$NODE_BIN" scripts/check-commit.mjs
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo ""
+  echo "──────────────────────────────────────────────"
+  echo " 提交已被阻止（安全问题或误提交风险）"
+  echo " 修正后可重新提交；确需跳过时用：git commit --no-verify"
+  echo "──────────────────────────────────────────────"
+  exit 1
+fi
+
+exit 0

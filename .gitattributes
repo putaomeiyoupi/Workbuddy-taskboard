@@ -1,0 +1,40 @@
+# 换行符策略
+# ============================================================
+# 本机实测过的两类坑，都用这个文件在仓库层锁死：
+#
+#   1. shell 脚本（.githooks/pre-commit）
+#      必须 LF。若被 checkout 成 CRLF，shebang 会变成 "#!/bin/sh\r"，
+#      内核找不到 /bin/sh\r ⇒ hook 静默失效或被拒。
+#
+#   2. Windows 批处理（.cmd / .bat）
+#      必须 CRLF。cmd.exe 在纯 LF 下 goto 标签跳转失配 ——
+#      表现为「文件明明存在却找不到」这类诡异错误。
+#
+# 其余文本交给 Git 的 text=auto 处理。
+
+* text=auto
+
+# shell 脚本：强制 LF
+*.sh          text eol=lf
+.githooks/*   text eol=lf
+
+# Windows 批处理：强制 CRLF
+*.cmd         text eol=crlf
+*.bat         text eol=crlf
+
+# 二进制文件：不做任何行尾转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.db   binary
+*.sqlite binary
+
+# 锁文件：保留原样，减少无意义 diff
+package-lock.json  text eol=lf -diff linguist-generated

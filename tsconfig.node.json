@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "outDir": "./node_modules/.tmp/tsconfig-node",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig-node.tsbuildinfo"
+  },
+  "//": "只包含 vite.config.ts，切勿把 server/**/*.ts 加进来。",
+  "//why": "本文件是 composite 项目，tsc -b 必定 emit。",
+  "//hazard": "没有 outDir 时产物会写在源码旁边。Vite 的配置解析顺序是 ",
+  "//hazard2": "['vite.config.js', 'vite.config.mjs', 'vite.config.ts', ...] —— .js 排在最前，",
+  "//hazard3": "于是生成的 vite.config.js 会【盖住】vite.config.ts，改了 TS 配置却不生效。",
+  "//hazard4": "server/*.js 盖住 server/*.ts 是同一类问题（见 .gitignore 注释）。",
+  "//server-typecheck": "server 的类型检查由 tsconfig.server.json（noEmit: true）负责。",
+  "include": ["vite.config.ts"]
+}

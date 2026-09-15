@@ -1,0 +1,70 @@
+{
+  "name": "task-kanban",
+  "version": "1.0.0",
+  "description": "基于 CodeBuddy Agent SDK 的任务调度看板：四列任务流转、工作空间互锁、优先级与依赖调度、SSE 实时日志",
+  "license": "Apache-2.0",
+  "author": "putaomeiyoupi",
+  "type": "module",
+  "homepage": "https://github.com/putaomeiyoupi/Workbuddy-taskboard#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/putaomeiyoupi/Workbuddy-taskboard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/putaomeiyoupi/Workbuddy-taskboard/issues"
+  },
+  "keywords": [
+    "task-board",
+    "kanban",
+    "agent",
+    "scheduler",
+    "codebuddy",
+    "agent-sdk",
+    "sse",
+    "react",
+    "express"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:client": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
+    "preview": "vite preview",
+    "server": "tsx server/index.ts"
+  },
+  "dependencies": {
+    "@tdesign-react/aigc": "^0.1.0-alpha.1",
+    "@tdesign-react/chat": "^1.0.2",
+    "@tencent-ai/agent-sdk": "^0.3.43",
+    "better-sqlite3": "^12.6.2",
+    "express": "^4.18.2",
+    "lucide-react": "^0.563.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.13.0",
+    "tdesign-icons-react": "^0.5.0",
+    "tdesign-react": "^1.12.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@types/uuid": "^9.0.7",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^8.2.2",
+    "less": "^4.3.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.6.2",
+    "typescript": "^5.3.2",
+    "vite": "^5.0.10"
+  }
+}

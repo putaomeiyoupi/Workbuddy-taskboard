@@ -1,0 +1,84 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+dist-ssr/
+*.local
+
+# ⚠️ 严禁把 tsc 的编译产物落到源码目录
+# server/ 由 tsx 直接跑 .ts；若旁边存在同名 .js，运行时会解析到 .js
+# 从而【盖住】.ts 源码，导致构建之后所有 TS 改动静默失效。
+# 根因已修复（tsconfig.node.json 不再 include server），这里再做一层保险。
+server/*.js
+server/*.d.ts
+server/*.js.map
+tsconfig.node.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# 同理：vite.config.ts 的编译产物绝不能落在源码旁。
+# Vite 的配置解析顺序是 ['vite.config.js', 'vite.config.mjs', 'vite.config.ts', ...]，
+# .js 排最前 —— 一旦存在就会【盖住】vite.config.ts，改了配置却不生效。
+# 根因已修（tsconfig.node.json 加了 outDir），这里做保险。
+vite.config.js
+vite.config.d.ts
+
+# Vite 加载配置时残留的临时文件（进程被中断时会留下）
+*.timestamp-*.mjs
+
+# 运行时数据（SQLite）
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 看板为「独立工作树」任务新建的 git worktree（成果在各自分支里）
+# 注意：这些目录里各自有一份完整的仓库检出，绝不能纳入版本控制
+.worktrees/
+
+# 探测/冒烟脚本的临时目录
+.probe-wt/
+
+# UI 取证截图（验证产物，不属于源码或说明文档）
+ui-shots/
+
+# Agent 的工作记忆（MEMORY.md / 日志）。属本机内部笔记，内含路径与环境细节，
+# 不适合随仓库公开；仍需保留在本地，勿删。
+.workbuddy/
+
+# WorkBuddy / CodeBuddy CLI 在项目里产生的状态目录
+# （例如 durable 定时任务会写到 {project}/.codebuddy/scheduled_tasks.json）。
+# 属运行时状态，不进版本控制。
+.codebuddy/
+
+# 本地开发笔记 / 临时产物
+.tmpcheck/
+.tmpcheck-garbage/
+*.tmpdel
+
+# 日志
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# 编辑器 / 系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 环境变量
+.env
+.env.*
+!.env.example
+
+# 临时探针/取证脚本与输出（用完即删）
+_tmp*

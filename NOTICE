@@ -1,0 +1,70 @@
+任务看板 (task-kanban)
+Copyright 2026 putaomeiyoupi
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+
+================================================================================
+第三方归属与致谢 / Third-party notices and acknowledgements
+================================================================================
+
+本项目的设计参考了以下开源项目。参考范围限于**设计思路与交互形态**，
+未复制其源代码（详见 README 的「引用与致谢」章节）。
+
+This project's design was informed by the following open-source project.
+Only design concepts and interaction patterns were referenced; no source code
+was copied (see the "Acknowledgements" section in README).
+
+1. Codex Taskboard
+   https://github.com/Aurxs/codex-taskboard
+   Copyright its contributors — licensed under the Apache License, Version 2.0
+
+   参考范围：
+     - 任务看板的信息架构与多列形态
+     - 「SSE 实时推送 + 周期性补偿核对」的同步策略
+     - 以独立 git worktree 隔离并行任务的思路
+     - 执行中向任务追加指令的交互设计
+
+   Referenced concepts:
+     - task board information architecture and multi-column layout
+     - "SSE push plus periodic reconciliation" sync strategy
+     - isolating parallel tasks with independent git worktrees
+     - appending instructions to an in-flight task
+
+   --------------------------------------------------------------------------
+   上游归属（Codex Taskboard 在其 NOTICE 中转引，Apache-2.0 §4(d)）
+   Upstream attribution carried forward from Codex Taskboard's own NOTICE:
+
+2. dashi-taskboard
+   https://github.com/chuspeeism/dashi-taskboard
+   Copyright its contributors — licensed under the Apache License, Version 2.0
+
+   --------------------------------------------------------------------------
+   ⚠️ 特别说明 / Caveat
+
+   Codex Taskboard 的应用图标资源（src-tauri/icons/*）复用自 OpenAI Codex
+   桌面客户端，**不受其 Apache-2.0 代码许可覆盖**，其权利归 OpenAI 所有。
+
+   The application icon assets in Codex Taskboard (src-tauri/icons/*) are
+   reused from the OpenAI Codex desktop application and are **NOT** covered
+   by its Apache-2.0 code license. All rights to that artwork remain with
+   OpenAI.
+
+   本项目**未使用** Codex Taskboard 或 OpenAI 的任何图标、美术资源或商标。
+   This project uses **none** of the icon or artwork assets from either
+   Codex Taskboard or OpenAI, and claims no endorsement by OpenAI.
+
+
+================================================================================
+后续复用的补充要求 / Requirements if code is reused later
+================================================================================
+
+若本项目在将来复用上述项目的源代码，必须在此处补充（Apache-2.0 §4）：
+
+  1. 来源文件与目标文件（which files were taken from where）
+  2. 所作修改说明（§4(b) 要求对修改过的文件加以标注）
+  3. 保留其原始版权与许可声明
+
+If source code from the projects above is reused in the future, this file MUST
+be updated to record the source and destination files, the modifications made,
+and the original copyright and license notices must be retained.
