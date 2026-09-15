@@ -386,9 +386,11 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
                 value={
                   automation.next_run_at ? (
                     <>
-                      <span>{fullTime(automation.next_run_at)}</span>
+                      {/* 绝对时间与倒计时各自不许内部折行 —— 宽度不够时倒计时**整段**换到第二行，
+                          而不是被拆成「还有 12h」/「41m」两截（那样反而更难读）。 */}
+                      <span className="whitespace-nowrap">{fullTime(automation.next_run_at)}</span>
                       <span
-                        className="ml-2 font-mono"
+                        className="ml-2 font-mono whitespace-nowrap"
                         style={{ color: '#c084fc' }}
                         title="距下次执行的实时倒计时"
                       >
@@ -425,19 +427,27 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
                 mono
               />
               <MetaRow icon={<Cpu size={11} />} label="模型" value={automation.model_id || '默认'} mono />
-              <MetaRow
-                icon={<FolderOpen size={11} />}
-                label="工作目录"
-                value={automation.cwds.length ? tailPath(automation.cwds[0]) : '—'}
-                mono
-                title={automation.cwds.join('\n')}
-              />
-              <MetaRow
-                icon={<Hash size={11} />}
-                label="调度规则"
-                value={automation.rrule || automation.scheduled_at || '—'}
-                mono
-              />
+              {/* 「工作目录」「调度规则」是长值，**独占整行** —— 放在两列网格里时
+                  单列扣掉 icon + label 只剩约 180px（≈22 个等宽字符），
+                  `WorkBuddy/automation-2026-...`、`FREQ=DAILY;BYHOUR=12;B...`
+                  这类值必然被截断（2026-09-15 用户反馈）。整行约 510px，配合折行可完整显示。 */}
+              <div className="col-span-2">
+                <MetaRow
+                  icon={<FolderOpen size={11} />}
+                  label="工作目录"
+                  value={automation.cwds.length ? tailPath(automation.cwds[0]) : '—'}
+                  mono
+                  title={automation.cwds.join('\n')}
+                />
+              </div>
+              <div className="col-span-2">
+                <MetaRow
+                  icon={<Hash size={11} />}
+                  label="调度规则"
+                  value={automation.rrule || automation.scheduled_at || '—'}
+                  mono
+                />
+              </div>
               {(automation.valid_from || automation.valid_until) && (
                 <div className="col-span-2">
                   <MetaRow
@@ -689,12 +699,33 @@ const MetaRow: React.FC<{
   tip?: string;
   mono?: boolean;
   title?: string;
-}> = ({ icon, label, value, mono, title, tip }) => (
-  <div className="flex items-center gap-1.5 min-w-0">
-    <span style={{ color: '#475569' }}>{icon}</span>
-    <span style={{ color: '#64748b' }}>{label}</span>
+  /**
+   * 强制单行省略。**默认不截断**（见下）。
+   *
+   * ⚠️ 2026-09-15 用户反馈「这里的信息显示不全，文字被截断了」：
+   *   抽屉宽 `min(560px, 92vw)`，两列网格每列减掉 icon + label 后可用宽度仅约
+   *   **180px**（约 22 个等宽字符），而实际值远超这个宽度 ——
+   *     · 调度规则 `FREQ=DAILY;BYHOUR=12;BYMINUTE=30` ≈ 45 字符
+   *     · 下次执行 `2026/9/16 12:30:00` + `还有 12h41m` ≈ 30 字符
+   *     · 工作目录 `WorkBuddy/automation-2026-...` ≈ 30+ 字符
+   *   ⇒ 统一 `truncate` 必然丢信息，只能靠悬停 title 补救（鼠标不动就看不到）。
+   *   现在默认**折行显示完整值**，`nowrap` 仅留给确实要保持一行的短值。
+   */
+  nowrap?: boolean;
+}> = ({ icon, label, value, mono, title, tip, nowrap }) => (
+  <div className={`flex gap-1.5 min-w-0 ${nowrap ? 'items-center' : 'items-start'}`}>
+    <span className={nowrap ? '' : 'mt-[3px]'} style={{ color: '#475569' }}>
+      {icon}
+    </span>
+    <span className="shrink-0" style={{ color: '#64748b' }}>
+      {label}
+    </span>
     <span
-      className={`truncate ${mono ? 'font-mono' : ''}`}
+      /**
+       * `break-all` 而非 `break-words`：RRULE / 路径 / 模型名都是**无空格长串**，
+       * 只按词断行的话整串找不到断点，会直接溢出容器（比截断更糟）。
+       */
+      className={`min-w-0 flex-1 ${nowrap ? 'truncate' : 'break-all'} ${mono ? 'font-mono' : ''}`}
       style={{ color: '#cbd5e1' }}
       title={tip ?? title ?? (typeof value === 'string' ? value : undefined)}
     >
