@@ -5,6 +5,9 @@ import {
   ChevronUpIcon,
   CheckCircleFilledIcon,
   CloseCircleFilledIcon,
+  // 人工介入状态用它：语义务是"需要人回答/确认"。⚠️ 不要用叉 ——
+  // 叉（CloseCircle）无论什么颜色都读作"出错了"，用户明确指出过这个误导。
+  HelpCircleFilledIcon,
 } from 'tdesign-icons-react';
 import { 
   Terminal, 
@@ -615,8 +618,8 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
           ) : isCompleted && !isError ? (
             <CheckCircleFilledIcon style={{ color: 'var(--td-success-color)' }} />
           ) : isHumanGate ? (
-            // 人工介入：不是失败，用琥珀色（警示语气）而非红色（错误语气）
-            <CloseCircleFilledIcon style={{ color: '#fbbf24' }} />
+            // 人工介入：问号（⚠️ 不用叉 —— 叉无论什么颜色都读作"出错"）
+            <HelpCircleFilledIcon style={{ color: '#fbbf24' }} />
           ) : (
             <CloseCircleFilledIcon style={{ color: 'var(--td-error-color)' }} />
           )}
@@ -648,7 +651,11 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
         
         {inputStr && (
           <div
-            className="px-3 py-2 text-xs font-mono whitespace-pre-wrap break-all max-h-24 overflow-y-auto border-t"
+            /* ⚠️ 高度与截断长度都调大过：原来 max-h-24（96px）+ 截到 300 字符，
+               AskUserQuestion 那种多问题 JSON 会被切得只剩两行还带滚动条（用户反馈"框太短"）。
+               取 384px 是按实测值定的：一个「2 选项 + 描述」的提问 JSON 渲染后约 355px，
+               正好能完整显示；再长的仍然有滚动条兜底。 */
+            className="px-3 py-2 text-xs font-mono whitespace-pre-wrap break-all max-h-96 overflow-y-auto border-t"
             style={{
               color: 'var(--td-text-color-secondary)',
               borderColor: 'var(--td-component-stroke)',
@@ -656,7 +663,7 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
             }}
           >
             <span style={{ color: 'var(--td-text-color-placeholder)' }}>输入: </span>
-            {inputStr.length > 300 ? inputStr.slice(0, 300) + '...' : inputStr}
+            {inputStr.length > 2000 ? inputStr.slice(0, 2000) + '…（已截断）' : inputStr}
           </div>
         )}
         
@@ -702,8 +709,8 @@ export function ToolCallsCollapse({ toolCalls, isStreaming = false }: ToolCallsC
         ) : hasError ? (
           <CloseCircleFilledIcon size={16} style={{ color: 'var(--td-error-color)' }} />
         ) : hasHumanGate ? (
-          // 只剩"人工介入" ⇒ 琥珀色：不是失败，也不是成功
-          <CloseCircleFilledIcon size={16} style={{ color: '#fbbf24' }} />
+          // 「已转人工」既不是成功也不是失败 ⇒ 问号图标（不能用叉，叉会被读成出错）
+          <HelpCircleFilledIcon size={16} style={{ color: '#fbbf24' }} />
         ) : (
           <CheckCircleFilledIcon size={16} style={{ color: 'var(--td-success-color)' }} />
         )}
