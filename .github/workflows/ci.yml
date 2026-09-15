@@ -30,6 +30,15 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
+      # ⚠️ 必须放在 `npm ci` **之前**。
+      #    本机 npm 会给其它平台的二进制可选依赖写下没有 version 的占位条目
+      #    （形如 {"dev":true,"optional":true}），Windows 本地能忍，
+      #    **Linux 的 `npm ci` 直接报 `npm error Invalid Version:`**。
+      #    若先跑 npm ci，它会在守卫之前就炸掉，看不到可读的诊断。
+      #    （2026-09-15 实测：两库 CI 首跑就是这么挂的 —— node 20/22 双双卡在「安装依赖」。）
+      - name: lockfile 守卫
+        run: node scripts/check-lockfile.mjs
+
       # 用 ci 而不是 install：严格按 lockfile 装，避免"本地能过 CI 过不了"
       - name: 安装依赖
         run: npm ci

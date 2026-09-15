@@ -112,6 +112,15 @@ echo.
 echo [10] countdown text cases:
 "%NODE_EXE%" "node_modules\tsx\dist\cli.mjs" "scripts\verify-countdown-text.mjs"
 echo.
+
+rem Lockfile integrity. A machine-local npm quirk writes version-less
+rem placeholder entries for other platforms optional binaries
+rem (e.g. {"dev":true,"optional":true}). Windows tolerates it, but
+rem "npm ci" on Linux dies with "npm error Invalid Version:".
+rem Symptom: local steps all green, GitHub Actions all red at "npm ci".
+echo [11] lockfile integrity:
+"%NODE_EXE%" "scripts\check-lockfile.mjs"
+echo.
 echo ============================================
 echo   Diagnostics complete.
 echo   If all checks above are OK, run start.cmd
