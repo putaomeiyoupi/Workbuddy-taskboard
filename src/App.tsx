@@ -260,17 +260,38 @@ function AppContent() {
   }, [navigate]);
 
   /**
-   * 从任务详情跳转到关联会话的「完整对话」。
+   * 跳转「完整会话」。
    *
-   * ⚠️ 必须走 `/host-session/:id` 而不是 `/chat/:id`（用户报过两次的 bug）：
-   *    这里的 id 是**宿主会话** id，看板自己的 sessions（data/chat.db）里没有它，
-   *    跳到 /chat/:id 会让 ChatPage 的 `currentSession` 为 undefined，
-   *    直接命中 `showNewChatView` 的第一条件 → 渲染出「新对话」页。
-   *    宿主会话在本页只读展示，写操作请去 WorkBuddy 桌面端。
+   * 🔴 **存在两套互不相干的会话 id，绝不能共用一个跳转目标** —— 这个坑已经踩过三次：
+   *
+   *   | 来源 | id 指向 | 正确路由 | 走错的后果 |
+   *   |---|---|---|---|
+   *   | **看板任务**（`task.session_id`） | 看板自己的 `sessions` 表（`data/chat.db`） | `/chat/:id` | 走 `/host-session/:id` → 「找不到该会话的记录文件」 |
+   *   | **宿主会话**（`HostSession.id`） | WorkBuddy 宿主库 | `/host-session/:id` | 走 `/chat/:id` → ChatPage 的 `currentSession` 为 undefined → 渲染成「新对话」页 |
+   *
+   * ⚠️ 任务那一路**曾经是对的**：早期任务可派发给宿主执行（`executor: 'workbuddy'`），
+   *    那时 `task.session_id` 存的确实是**宿主会话 id**，所以跳 `/host-session/:id` 没问题。
+   *    后来派发通道下线、执行者只剩 `local` ⇒ `task.session_id` 改存**看板自己的会话 id**，
+   *    但跳转目标没跟着改，于是点「查看完整对话」必然报「找不到该会话的记录文件」。
+   *
+   * ⇒ 所以这里**必须拆成两个 handler**，别再合并。
    */
-  const handleOpenSession = useCallback((sessionId: string) => {
-    navigate(`/host-session/${encodeURIComponent(sessionId)}`);
-  }, [navigate]);
+
+  /** 看板任务 → 看板自己的会话页（ChatPage） */
+  const handleOpenTaskSession = useCallback(
+    (sessionId: string) => {
+      navigate(`/chat/${encodeURIComponent(sessionId)}`);
+    },
+    [navigate]
+  );
+
+  /** 宿主会话 → 只读的宿主会话查看页（HostSessionChatView） */
+  const handleOpenHostSession = useCallback(
+    (sessionId: string) => {
+      navigate(`/host-session/${encodeURIComponent(sessionId)}`);
+    },
+    [navigate]
+  );
 
   // Sidebar 状态
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -352,7 +373,8 @@ function AppContent() {
           />
         ) : (
           <BoardPage
-            onOpenSession={handleOpenSession}
+            onOpenSession={handleOpenTaskSession}
+            onOpenHostSession={handleOpenHostSession}
             onOpenChat={() => navigate('/chat')}
             onOpenSettings={handleOpenSettings}
           />

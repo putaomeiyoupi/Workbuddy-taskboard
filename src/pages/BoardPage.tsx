@@ -39,8 +39,10 @@ import { HostDrawer, type HostTarget } from '../components/board/HostDrawer';
 import { BOARD_COLUMNS, columnOf, jobIsAwaiting, jobIsExecuting } from '../components/board/boardConfig';
 
 interface BoardPageProps {
-  /** 跳转到某个会话（查看任务完整对话） */
+  /** 跳转到**看板任务**的完整会话（`task.session_id` 指向看板自己的 sessions 表 → `/chat/:id`） */
   onOpenSession?: (sessionId: string) => void;
+  /** 跳转到**宿主会话**的完整记录（`HostSession.id` 指向宿主库 → `/host-session/:id`） */
+  onOpenHostSession?: (sessionId: string) => void;
   /** 切换到对话页 */
   onOpenChat?: () => void;
   /** 切换到设置页 */
@@ -49,6 +51,7 @@ interface BoardPageProps {
 
 export const BoardPage: React.FC<BoardPageProps> = ({
   onOpenSession,
+  onOpenHostSession,
   onOpenChat,
   onOpenSettings,
 }) => {
@@ -671,6 +674,7 @@ export const BoardPage: React.FC<BoardPageProps> = ({
         automationLatestRun={
           hostTarget?.automation ? (host?.latestRuns?.[hostTarget.automation.id] ?? null) : null
         }
+        onOpenFullSession={onOpenHostSession}
         onClose={() => setHostTarget(null)}
       />
     </div>

@@ -83,6 +83,14 @@ interface HostDrawerProps {
   target: HostTarget | null;
   /** 自动化卡片：附带它的最近一次运行（展示用） */
   automationLatestRun?: HostAutomationRun | null;
+  /**
+   * 打开该宿主会话的**完整记录**（整页只读，路由 `/host-session/:id`）。
+   *
+   * ⚠️ 传的必须是**宿主会话 id**（`HostSession.id`，来自宿主库）。
+   *    它与「看板任务的会话 id」是两套完全不同的命名空间 ——
+   *    后者属于看板自己的 `sessions` 表，应走 `/chat/:id`。详见 `App.tsx` 里的对照表。
+   */
+  onOpenFullSession?: (sessionId: string) => void;
   onClose: () => void;
   /**
    * ⚠️ 2026-09-15：原先这里还有 7 个**写侧** props（onReply / onRespawn / onStop /
@@ -151,6 +159,7 @@ function stateView(target: HostTarget): {
 export const HostDrawer: React.FC<HostDrawerProps> = ({
   target,
   automationLatestRun,
+  onOpenFullSession,
   onClose,
 }) => {
   // ⚠️ 2026-09-15：原先这里还有一批**写侧 state**（reply / resumeText / busy /
@@ -331,6 +340,27 @@ export const HostDrawer: React.FC<HostDrawerProps> = ({
         {/* ⚠️ 2026-09-15：「上次提交的结果」条（宿主写操作流水 lastOp）随 CLI 派发通道
             下线一并移除 —— 本抽屉已无写操作，也没有 opLogs 的写入方。
              */}
+
+        {/* 宿主会话：查看**完整记录**（整页只读，路由 `/host-session/:id`）。
+            抽屉里只展示「待选择提问 + 最近对话 + 活动流」，要看全部对话与工具调用就点这里。
+            ⚠️ 这里传的是**宿主会话 id**；看板任务的会话 id 是另一套（走 `/chat/:id`），别混。 */}
+        {session && !automation && onOpenFullSession && (
+          <div
+            className="flex flex-wrap items-center gap-2 px-4 py-3"
+            style={{ borderBottom: '1px solid var(--hairline)' }}
+          >
+            <Button
+              size="small"
+              variant="outline"
+              onClick={() => onOpenFullSession(session.id)}
+            >
+              查看完整会话
+            </Button>
+            <span className="text-[12.5px]" style={{ color: '#64748b' }}>
+              整页只读视图（全部对话与工具调用）
+            </span>
+          </div>
+        )}
         {/* ============ 自动化定时任务：完整信息 + 可做的动作 ============
             自动化由 WorkBuddy 桌面端管理，官方 HTTP API 没有更新端点，
             宿主库也保持只读 —— 所以这里把信息给全，并明确说明去哪里改。 */}
