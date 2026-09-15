@@ -113,8 +113,18 @@ npm run dev
 Windows 上也可以直接双击 `start.cmd`：单端口同时提供前端与 API，无需单独起 Vite，
 **启动就绪后会自动在浏览器里打开看板**。启动异常时双击 `check.cmd` 做一次自检。
 
-端口会在 `3000`–`3010` 里自动挑一个空闲的（3000 常被别的程序占用），所以地址每次可能不同——
-自动打开用的是**实际选中的端口**，不用手动敲地址。不想让它自动打开就设一下环境变量：
+`start.cmd` 的端口由 `scripts/port-preflight.mjs` 统一仲裁，**单一真源是 `config/port.txt`**
+（默认 `47831`，固定不变）。端口被占用时**直接报错、不会偷偷换**；只有显式授权才允许漂移：
+
+```bat
+set KANBAN_ALLOW_PORT_SHIFT=1
+start.cmd
+```
+
+> ⚠️ 换端口会让**宿主面板失效**：WorkBuddy 里的「任务看板」入口 URL 写死了
+> `http://127.0.0.1:47831/index.html`，端口一变入口就打不开（`start.cmd` 会就此发警告）。
+
+不想让它自动打开浏览器就设一下环境变量：
 
 ```bat
 set KANBAN_NO_BROWSER=1
@@ -173,12 +183,25 @@ src/
 
 ## 环境变量
 
+分两类，**写入位置不同，别混**。
+
+**① 写入项目根的 `.env`**（模板见 `.env.example`；服务端启动时读取，改完需重启）
+
 | 变量 | 说明 |
 |---|---|
 | `CODEBUDDY_API_KEY` | API Key 方式登录 |
 | `CODEBUDDY_AUTH_TOKEN` | Token 方式登录 |
 | `CODEBUDDY_BASE_URL` | 自定义 API 端点（可选） |
-| `PORT` | 后端端口，默认 3000 |
+| `CODEBUDDY_INTERNET_ENVIRONMENT` | 站点选择（`internal` 国内站 / 留空国际站 / `ioa`）——**最常被漏的一项** |
+
+**② 启动脚本用的 shell 变量**（在命令行 `set` 后运行 `start.cmd`；**不读 `.env`**）
+
+| 变量 | 说明 |
+|---|---|
+| `PORT` | 后端监听端口。`npm run dev` 时默认 `3000`；`start.cmd` 会用 `config/port.txt`（默认 `47831`）**覆盖**它 |
+| `KANBAN_ALLOW_PORT_SHIFT` | 设为 `1` 才允许在配置端口被占用时自动换端口（会让宿主面板入口失效，见「快速开始」） |
+| `KANBAN_NO_BROWSER` | 设为 `1` 时 `start.cmd` 不自动打开浏览器 |
+| `KANBAN_NODE` | 指定 `node.exe` 完整路径（默认自动查找：PATH → 常见安装位置 → `%USERPROFILE%\.workbuddy\binaries\node`） |
 
 ## 开发约束
 

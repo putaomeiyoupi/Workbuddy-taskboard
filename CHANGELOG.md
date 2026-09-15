@@ -5,6 +5,13 @@
 
 ## [Unreleased]
 
+### 文档
+
+- 修正 README「快速开始」中的端口说明：`start.cmd` 的端口取自 `config/port.txt`
+  （默认固定 `47831`），不再是自动挑选；补上允许漂移的开关与漂移会使宿主面板入口失效的提示
+- 「环境变量」拆为「写入 `.env`」与「启动脚本用的 shell 变量」两张表，并补齐
+  `KANBAN_ALLOW_PORT_SHIFT` / `KANBAN_NO_BROWSER` / `KANBAN_NODE` 的说明
+
 ## [1.0.0] - 2026-09-15
 
 首个公开版本。
