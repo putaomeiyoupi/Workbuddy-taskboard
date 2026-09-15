@@ -12,7 +12,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Dialog, Input, Textarea, Select, Button, MessagePlugin } from 'tdesign-react';
 import { Clock, GitBranch, Puzzle, Cpu, Zap, Files } from 'lucide-react';
-import type { Model, Workspace, Task, NewTaskPayload, TaskPriority, TaskExecutor, TaskIsolation, RepeatMode, RepeatSpec } from '../../types';
+import type { Model, Workspace, Task, NewTaskPayload, TaskPriority, TaskExecutor, RepeatMode, RepeatSpec } from '../../types';
 import { isExecuting } from './boardConfig';
 
 /** 优先级选项 */
@@ -23,26 +23,14 @@ const PRIORITY_OPTIONS: Array<{ value: TaskPriority; label: string; color: strin
 ];
 
 /**
- * 执行隔离选项。
- *
- * 决定这个任务与**同一工作空间内其他任务**的关系：
- *  - 共享目录：就地修改，同空间任务串行（工作空间互锁），成果直接落进你的工作目录
- *  - 独立工作树：CLI 开一个独立 git worktree，可与同空间任务并行，成果在独立目录
+ * ⚠️ 原先这里有一组「执行隔离」选项（共享目录 / 独立工作树）。
+ *     已整组删除，原因：
+ *       ① `worktree` 早已不可用 —— 服务端对 `isolation: 'worktree'` 直接返回 400；
+ *       ② 更关键的是，服务端创建任务时把 `isolation` **写死为 `'shared'`**
+ *          （见 `server/index.ts` 的 create 分支），客户端传什么都一样 ⇒ 这组控件是死的；
+ *       ③ 只剩「共享目录」一个有效值，摆一个单选项只会增加理解成本。
+ *     任务与同空间其他任务的关系恒为：**就地修改 + 工作空间互锁（串行）**。
  */
-const ISOLATION_OPTIONS: Array<{ value: TaskIsolation; label: string; hint: string; color: string }> = [
-  {
-    value: 'shared',
-    label: '共享目录',
-    hint: '就地修改工作空间目录；同空间任务串行，成果直接落进你的目录',
-    color: '#94a3b8',
-  },
-  {
-    value: 'worktree',
-    label: '独立工作树',
-    hint: '看板为本次执行新建 git worktree，可与同空间任务并行；成果在独立目录',
-    color: '#34d399',
-  },
-];
 
 /** 执行者选项 */
 interface ExecutorOption {
@@ -161,8 +149,6 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
   const [submitting, setSubmitting] = useState(false);
   /** 执行者：只剩本地（workbuddy 执行器已下线） */
   const [executor, setExecutor] = useState<TaskExecutor>('local');
-  /** 隔离模式：默认共享目录（沿用工作空间互锁的串行语义） */
-  const [isolation, setIsolation] = useState<TaskIsolation>('shared');
   /**
    * 按执行者拉取的模型清单。
    * 「看板里能选的模型」必须与「该执行者真正能用的模型」一致 ——
@@ -213,7 +199,6 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
     setDependsOn([]);
     setSubmitting(false);
     setExecutor('local');
-    setIsolation('shared');
     setScopesInput('');
   }, [visible, defaultWorkspaceId, workspaces, defaultModel, models]);
 
@@ -341,7 +326,7 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
           .map(x => x.trim())
           .filter(Boolean),
         executor,
-        isolation,
+        // ⚠️ 不再传 isolation：服务端创建时一律写死 'shared'（worktree 已废弃），传了也没用
         repeat_mode,
         repeat_spec,
         repeat_until: useSchedule && untilAt ? new Date(untilAt).toISOString() : null,
@@ -537,62 +522,8 @@ export const NewTaskDialog: React.FC<NewTaskDialogProps> = ({
         {/* 执行者：选项已移除 —— `workbuddy` 执行器下线后只剩本地一种，
             留一个"只有一个选项"的单选组只会增加理解成本（executor 恒为 local）。 */}
 
-        {/* 执行隔离 */}
-        <div>
-          <label className="flex items-center gap-1.5 text-xs mb-1.5 font-medium" style={{ color: '#94a3b8' }}>
-            <GitBranch size={12} />
-            执行隔离
-            <span className="font-normal opacity-60">（决定能否与同空间任务并行）</span>
-          </label>
-          <div className="flex gap-2">
-            {ISOLATION_OPTIONS.map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setIsolation(opt.value)}
-                className="flex-1 rounded-md py-2 text-left transition-all"
-                style={{
-                  background:
-                    isolation === opt.value
-                      ? `color-mix(in srgb, ${opt.color} 14%, transparent)`
-                      : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${isolation === opt.value ? opt.color : 'var(--hairline)'}`,
-                  boxShadow: isolation === opt.value ? `0 0 12px -4px ${opt.color}` : 'none',
-                  paddingLeft: 10,
-                  paddingRight: 10,
-                }}
-              >
-                <div
-                  className="text-xs font-medium flex items-center gap-1.5"
-                  style={{ color: isolation === opt.value ? opt.color : '#94a3b8' }}
-                >
-                  {opt.label}
-                  {opt.value === 'shared' && (
-                    <span
-                      className="text-[12px] px-1 rounded"
-                      style={{
-                        background: 'rgba(148,163,184,0.18)',
-                        color: '#cbd5e1',
-                        border: '1px solid rgba(148,163,184,0.3)',
-                      }}
-                    >
-                      默认
-                    </span>
-                  )}
-                </div>
-                <div className="text-[12.5px] mt-0.5 leading-snug opacity-70" style={{ color: '#7f8ea8' }}>
-                  {opt.hint}
-                </div>
-              </button>
-            ))}
-          </div>
-          {isolation === 'worktree' && (
-            <div className="text-[12.5px] mt-1.5 leading-snug" style={{ color: '#6ee7b7' }}>
-              由看板执行 <code>git worktree add</code>，分支名 <code>kanban/&lt;任务短id&gt;</code>。
-              要求工作空间是 git 仓库，否则任务会直接失败（不会静默降级成并发写）。
-              执行后详情里会显示实际的工作树路径。
-            </div>
-          )}
-        </div>
+        {/* 执行隔离：整组已删除 —— `worktree` 不可用，且服务端把 isolation 写死为 'shared'，
+            这组控件实际不生效（详见文件上方 ISOLATION_OPTIONS 位置留下的说明）。 */}
 
         {/* 定时执行 */}
         <div
